@@ -422,16 +422,24 @@ function normalizeWeights(goals) {
   }
 }
 
-// ── 가중 롤업: 자식이 있는 목표의 progress = Σ(자식.progress × 자식.weight). 바텀업.
+// ── 가중 평균 진행률 (순수 함수): Σ(progress×weight) / Σ(weight), 반올림
+//   children = [{ progress, weight }, ...] → 0~100 정수 반환
+//   (순수 함수라 파일/날짜에 의존하지 않아 테스트하기 쉽다)
+function weightedProgress(children) {
+  if (!Array.isArray(children) || children.length === 0) return 0;
+  const sumW = children.reduce((s, k) => s + (k.weight || 0), 0) || 1;
+  const sum  = children.reduce((s, k) => s + (k.progress || 0) * (k.weight || 0), 0);
+  return Math.round(sum / sumW);
+}
+
+// ── 가중 롤업: 자식이 있는 목표의 progress = 자식들의 가중 평균. 바텀업.
 function recomputeRollup(goals) {
   const cm = _childrenMap(goals);
   for (const level of ['daily', 'weekly', 'monthly', 'annual']) {  // 바텀업 순서
     for (const g of goals[level]) {
       const kids = cm[g.id];
       if (kids && kids.length) {
-        const sumW = kids.reduce((s, k) => s + (k.weight || 0), 0) || 1;
-        const prog = kids.reduce((s, k) => s + k.progress * (k.weight || 0), 0) / sumW;
-        g.progress = Math.round(prog);
+        g.progress = weightedProgress(kids);
         g.status = g.progress >= 100 ? 'done' : (g.status === 'done' ? 'active' : g.status);
         g.isParent = true;
       } else {
@@ -633,6 +641,7 @@ module.exports = {
   getGoalsSummary,
   getPace,
   getElapsedRatio,
+  weightedProgress,
   getLoopInterval,
   setLoopInterval
 };
