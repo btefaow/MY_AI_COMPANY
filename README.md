@@ -1,5 +1,7 @@
 # 🏢 나만의 AI 회사 (My AI Company)
 
+> 📦 저장소: https://github.com/btefaow/MY_AI_COMPANY
+
 **LM Studio 로컬 LLM** 위에서 돌아가는 **자율 멀티 에이전트 회사** VS Code 확장입니다.
 파트장(CEO)이 팀을 지휘하고, 회사 목표를 계층적으로 관리하며, 코드를 만들고 검증하는 일을 **스스로 반복**합니다. 빌드 과정이 없어 `F5` 한 번으로 바로 실행됩니다.
 
