@@ -1,0 +1,43 @@
+{
+  "//설명": "이 파일은 VS Code에게 '내 확장이 무엇이고 무엇을 하는지' 알려주는 명세서입니다.",
+  "name": "MY_AI_COMPANY",
+  "displayName": "나만의 AI 회사",
+  "description": "LM Studio 로컬 LLM 기반 자율 멀티 에이전트 회사 — 파트장이 팀을 지휘하고 목표를 계층 관리하는 VS Code 확장",
+  "version": "0.1.0",
+  "publisher": "me",
+  "//engines": "이 확장이 돌아가는 VS Code 최소 버전. Cursor/Antigravity도 이 API를 그대로 씁니다.",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "//main": "확장이 켜질 때 가장 먼저 실행되는 파일. 빌드 없이 바로 이 JS를 씁니다.",
+  "main": "./extension.js",
+  "//activationEvents": "VS Code가 시작을 마치면 이 확장을 자동으로 깨웁니다.",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "//contributes": "이 확장이 VS Code에 '추가'하는 UI 요소들을 선언합니다.",
+  "contributes": {
+    "//viewsContainers": "왼쪽 세로 막대(액티비티 바)에 내 아이콘을 하나 만듭니다.",
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "my-agent-sidebar",
+          "title": "나의 에이전트",
+          "icon": "$(hubot)"
+        }
+      ]
+    },
+    "//views": "위에서 만든 아이콘을 누르면 열리는 패널에 '채팅' 웹뷰를 넣습니다.",
+    "views": {
+      "my-agent-sidebar": [
+        {
+          "type": "webview",
+          "id": "my-agent-chat-view",
+          "name": "채팅"
+        }
+      ]
+    }
+  },
+  "devDependencies": {},
+  "//note": "외부 패키지 불필요 - 순수 JavaScript + VS Code API 사용"
+}

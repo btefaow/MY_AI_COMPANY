@@ -1,0 +1,5 @@
+# 줄바꿈 정규화 — 저장소에는 LF로 저장 (크로스플랫폼 표준)
+* text=auto eol=lf
+
+# Windows 전용 PowerShell 스크립트는 CRLF 유지
+*.ps1 text eol=crlf

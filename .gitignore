@@ -1,0 +1,24 @@
+# ── 의존성 (npm install로 복원 가능) ──
+node_modules/
+
+# ── AI 회사 "데이터" (코드 아님 — 런타임에 자동 생성/누적) ──
+# 기억·목표·대화로그·의사결정 등. 코드와 분리해서 추적하지 않는다.
+my-ai-brain/
+
+# 에이전트가 만들어내는 산출물·리포트
+workspace/
+
+# ── 환경/비밀 ──
+.env
+.env.*
+
+# ── 로그 ──
+*.log
+npm-debug.log*
+
+# ── OS / 에디터 잡파일 ──
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~

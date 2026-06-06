@@ -1,0 +1,15 @@
+{
+  "// 설명": "이 파일이 있으면 VS Code에서 F5 키를 눌렀을 때 '확장 테스트용 새 창'이 열립니다.",
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "확장 실행 (디버그)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "${workspaceFolder}"
+      ]
+    }
+  ]
+}
