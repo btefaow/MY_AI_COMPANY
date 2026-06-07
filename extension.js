@@ -130,8 +130,13 @@ const ANTI_HALLUCINATION_PROMPT = `
 - 일반 지식으로 가능한 분석·정리·초안 작성 (문서·코드·기획안)
 - 이미 위 '사람이 제공한 자료'에 있는 데이터로 할 수 있는 일
 - 형식·구조·표현 같은 내부 결정 → 합리적 가정을 세우고 그냥 진행 (가정은 명시)
+- 의사결정을 좌우하지 않는 사소한 수치 → 요청하지 말고 "[추정: 약 OO]" 형태로 명확히 표시하고 진행
 
-원칙: **"되돌릴 수 있고 내가 아는 걸로 가능"하면 직접, "실시간 사실·외부 실행"이면 요청.** 추측이 불가피하면 "추정치"라고 밝히고 근거를 답니다.`;
+### ⚖️ 요청 vs 추정 판단 기준
+- 이 숫자가 틀리면 큰 결정을 망치는가? → 예: <need_human>으로 요청 / 아니오: [추정]으로 진행
+- 한 번에 너무 많이 요청하지 말 것. 꼭 필요한 핵심 1~2개로 좁히세요.
+
+원칙: **"되돌릴 수 있고 내가 아는 걸로 가능"하면 직접·추정, "결정을 좌우하는 실시간 사실·외부 실행"이면 요청.**`;
 
 // ★ 7단계: CEO 전용 — 팀원 위임 태그 사용법
 // JSON 플래너보다 훨씬 안정적. LLM이 응답 텍스트 안에 자연스럽게 포함 가능.
@@ -189,6 +194,13 @@ ${AGENTS.filter(a => a.id !== 'ceo').map(a => `- ${a.id}: ${a.role}`).join('\n')
 
 예시:
 <suggest title="이집트보다 사우디 먼저 집중" category="strategy" detail="사우디 Vision 2030으로 핀테크 예산이 크고 진입장벽이 낮음. 이집트는 외환규제로 6개월 후 진입 권장" impact="초기 리소스를 한 시장에 집중해 성과를 빨리 검증"/>
+
+## 자료요청 검토 도구 (당신이 폭주를 거르는 필터)
+
+팀이 올린 '자료요청 검토 큐'를 보고, 대표님께는 **정말 중요한 것만 최대 5건** 올립니다.
+- 중복·겹침·사소함·추정 가능 → 폐기: <drop_request id="요청ID"/>
+- 의사결정에 치명적인 핵심 데이터만 → 승격: <escalate_request id="요청ID" priority="high|medium|low"/>
+대표님이 39건에 묻히지 않도록 가차없이 거르세요. 애매하면 폐기가 기본입니다.
 
 ## 목표 관리 도구 (당신이 회사 목표의 관리자입니다)
 
@@ -483,6 +495,14 @@ ${summary}
       ? accepted.map(s => `- 채택: ${s.title}${s.userNote ? ` (대표님 메모: ${s.userNote})` : ''}`).join('\n')
       : '(아직 없음)';
 
+    // ★ 팀이 올린 자료요청 검토 큐 (파트장이 선별 → 대표님께 최대 5건)
+    const triage = brain.getTriageRequests();
+    const pendingCount = brain.countPendingRequests();
+    const slots = Math.max(0, brain.MAX_PENDING_REQUESTS - pendingCount);
+    const triageSummary = triage.length > 0
+      ? triage.slice(0, 20).map(r => `- [${r.id}] (${r.requestType}/${r.requestedBy}) ${r.request}`).join('\n')
+      : '(검토할 요청 없음)';
+
     return `당신은 스타트업 파트장입니다. 지금은 ${todayStr}, 자율 실행 세션 ${this._sessionCount || 1}회차입니다.
 
 ## 회사 비전
@@ -500,10 +520,22 @@ ${fulfilledSummary}
 ## 대표님이 채택한 제안 (실행에 옮길 것)
 ${acceptedSummary}
 
+## 팀이 올린 자료요청 — 검토 후 선별 (대표님 처리함 빈자리: ${slots}/${brain.MAX_PENDING_REQUESTS})
+${triageSummary}
+
 ## 이전 실행 기록 (참고용 — 반복하지 말 것)
 ${previousReport ? previousReport : '(이전 기록이 없습니다)'}
 
 ---
+
+# 0. 먼저: 위 '자료요청 검토'를 처리하세요 (대표님이 폭주에 묻히지 않게)
+
+당신은 대표님께 올라갈 요청을 거르는 '필터'입니다. 위 검토 큐를 보고:
+- **중복·겹치는 요청은 통합**하거나 폐기: <drop_request id="요청ID"/>
+- **사소하거나 추정 가능한 것도 폐기**: <drop_request id="요청ID"/> (팀에겐 "추정으로 진행하라")
+- **정말 중요한 것만** 우선순위를 매겨 대표님께 올림 (빈자리 ${slots}건까지만):
+  <escalate_request id="요청ID" priority="high|medium|low"/>
+- 대표님 처리함은 최대 ${brain.MAX_PENDING_REQUESTS}건. 넘치면 올리지 말고 다음 기회에.
 
 # 임무: 전략 선언 금지, 실제 한 걸음 전진
 
@@ -729,17 +761,20 @@ ${result.output}
       return;
     }
 
-    // Step 3: CEO 응답에서 위임/질문/완료판단/목표관리/사람요청/제안 태그 파싱
+    // Step 3: CEO 응답에서 위임/질문/완료판단/목표관리/사람요청/제안/검토 태그 파싱
     let   delegates    = parseDelegateTags(ceoAnswer);
     const askUsers     = parseAskUserTags(ceoAnswer);
     const goalStatus   = parseGoalStatus(ceoAnswer);   // ★ 완료 판단
     const needHumans   = parseNeedHuman(ceoAnswer);    // ★ 사람 도움 요청
     const suggestions  = parseSuggest(ceoAnswer);      // ★ 대표님께 제안
+    const escalates    = parseEscalateRequests(ceoAnswer); // ★ 요청 승격
+    const drops        = parseDropRequests(ceoAnswer);     // ★ 요청 폐기
+    const hasReviewTags = escalates.length || drops.length;
     const hasGoalTags  = /<(add_goal|set_progress|update_goal|delete_goal)\b/.test(ceoAnswer);
     let cleanCeoAnswer = ceoAnswer;
 
-    if (delegates.length || askUsers.length || goalStatus || needHumans.length || suggestions.length || hasGoalTags) {
-      cleanCeoAnswer = stripSuggest(stripNeedHuman(stripGoalTags(stripGoalStatus(stripDelegateTags(stripAskUserTags(ceoAnswer))))));
+    if (delegates.length || askUsers.length || goalStatus || needHumans.length || suggestions.length || hasReviewTags || hasGoalTags) {
+      cleanCeoAnswer = stripReviewTags(stripSuggest(stripNeedHuman(stripGoalTags(stripGoalStatus(stripDelegateTags(stripAskUserTags(ceoAnswer)))))));
       webviewView.webview.postMessage({ type: 'update_bubble', text: cleanCeoAnswer });
     }
 
@@ -748,10 +783,24 @@ ${result.output}
       webviewView.webview.postMessage({ type: 'loop_status', text: gm });
     }
 
-    // ★ 사람 도움 요청 → 대표님 처리함에 쌓기
+    // ★ 파트장의 요청 검토: 중복 폐기 → 중요한 것만 승격(상한 5건)
+    for (const id of drops) {
+      if (brain.dropRequest(id)) webviewView.webview.postMessage({ type: 'loop_status', text: `🗑 요청 폐기(중복/사소): ${id}` });
+    }
+    for (const esc of escalates) {
+      const res = brain.escalateRequest(esc.id, esc.priority);
+      if (res && res.capped) {
+        webviewView.webview.postMessage({ type: 'loop_status', text: `⛔ 대표님 처리함 상한(${brain.MAX_PENDING_REQUESTS}건) — 승격 보류` });
+        break;
+      } else if (res) {
+        webviewView.webview.postMessage({ type: 'loop_status', text: `⬆️ 대표님께 올림: ${(res.request || '').slice(0, 40)}` });
+      }
+    }
+
+    // ★ 사람 도움 요청 → 검토 대기(triage)로 (파트장이 나중에 선별해 대표님께 승격)
     for (const nh of needHumans) {
       const reqItem = brain.saveRequest({ ...nh, requestedBy: '파트장' });
-      if (reqItem) webviewView.webview.postMessage({ type: 'loop_status', text: `🙋 사람 도움 요청: ${nh.request.slice(0, 50)}` });
+      if (reqItem) webviewView.webview.postMessage({ type: 'loop_status', text: `📥 검토 대기 등록: ${nh.request.slice(0, 50)}` });
     }
 
     // ★ 파트장의 제안 → 대표님 처리함에 쌓기
@@ -1672,6 +1721,32 @@ function stripSuggest(text) {
 }
 
 // ──────────────────────────────────────────────────────────────
+//  파트장의 요청 검토 도구: triage 요청을 승격/폐기
+//  <escalate_request id="reqID" priority="high|medium|low"/>
+//  <drop_request id="reqID"/>
+// ──────────────────────────────────────────────────────────────
+function parseEscalateRequests(text) {
+  const found = [];
+  const r = /<escalate_request\s+[^>]*?\/>/g;
+  let m;
+  while ((m = r.exec(text)) !== null) {
+    const id = _attr(m[0], 'id');
+    if (id) found.push({ id, priority: _attr(m[0], 'priority') || 'medium' });
+  }
+  return found;
+}
+function parseDropRequests(text) {
+  const found = [];
+  const r = /<drop_request\s+id="([^"]+)"\s*\/>/g;
+  let m;
+  while ((m = r.exec(text)) !== null) { if (m[1].trim()) found.push(m[1].trim()); }
+  return found;
+}
+function stripReviewTags(text) {
+  return text.replace(/<escalate_request\s+[^>]*\/>/g, '').replace(/<drop_request\s+[^>]*\/>/g, '');
+}
+
+// ──────────────────────────────────────────────────────────────
 //  parseGoalStatus: 파트장 응답에서 <goal_status> 태그 추출
 //  반환: { state: 'done'|'continue', reason: string } | null
 // ──────────────────────────────────────────────────────────────
@@ -2119,8 +2194,9 @@ function getDashboardData() {
   const pendingDecisions  = brain.getPendingDecisions();
   const pendingRequests   = brain.getPendingRequests();
   const pendingSuggestions = brain.getPendingSuggestions();
+  const triageCount        = brain.getTriageRequests().length;
 
-  return { agentStats, convCount: convFiles.length, recentActivities, recentFiles: recentFiles.slice(0, 8), companyName, brainDir, workspaceDir, pendingDecisions, pendingRequests, pendingSuggestions };
+  return { agentStats, convCount: convFiles.length, recentActivities, recentFiles: recentFiles.slice(0, 8), companyName, brainDir, workspaceDir, pendingDecisions, pendingRequests, pendingSuggestions, triageCount };
 }
 
 // ============================================================
@@ -2489,7 +2565,7 @@ class DashboardPanel {
     <div class="inbox-sub">🗳️ 결재 — 결정해 주세요 ${dCount > 0 ? `(${dCount})` : ''}</div>
     ${decisionCards}
 
-    <div class="inbox-sub" style="margin-top:14px;">🙋 요청 — AI가 못 하는 일, 채워 주세요 ${rCount > 0 ? `(${rCount})` : ''}</div>
+    <div class="inbox-sub" style="margin-top:14px;">🙋 요청 — AI가 못 하는 일, 채워 주세요 ${rCount > 0 ? `(${rCount})` : ''}${data.triageCount > 0 ? `<span style="color:#8b949e;font-weight:400;font-size:11px;"> · 파트장 검토 중 ${data.triageCount}건</span>` : ''}</div>
     ${requestCards}
 
     <div class="inbox-sub" style="margin-top:14px;">💡 제안 — 파트장이 올린 중요 제안 ${sCount > 0 ? `(${sCount})` : ''}</div>

@@ -334,7 +334,10 @@ function rejectDecision(decisionId, reason) {
 //  요청(request)  = "이건 제가 못 해요, 채워/해주세요" (사람이 자료·작업 제공)
 // ============================================================
 const REQUEST_TYPES = ['data', 'action', 'file', 'verify'];
+const MAX_PENDING_REQUESTS = 5;  // ★ 대표님 처리함에 동시 노출되는 요청 상한
 
+// 에이전트/파트장의 요청은 먼저 'triage'(검토 대기)로 들어간다.
+// 파트장이 검토해 중복은 버리고, 중요한 것만 우선순위 매겨 'waiting'으로 승격(escalate).
 function saveRequest(req) {
   try {
     const dir = path.join(BRAIN_DIR, 'decisions');
@@ -345,7 +348,7 @@ function saveRequest(req) {
       id,
       kind: 'request',  // ★ 사람 도움 요청
       timestamp: new Date().toISOString(),
-      status: 'waiting',  // waiting | fulfilled | dismissed
+      status: 'triage',  // triage(검토대기) → waiting(대표님께) | dropped | fulfilled | dismissed
       requestType: REQUEST_TYPES.includes(req.requestType) ? req.requestType : 'data',
       reason: (req.reason || '').slice(0, 500),       // 왜 사람이 필요한지
       request: (req.request || '').slice(0, 500),     // 사람에게 부탁하는 구체 내용
@@ -358,16 +361,60 @@ function saveRequest(req) {
   } catch { return null; }
 }
 
-// 대기 중인 사람 도움 요청 목록
+function _readRequests() {
+  const dir = path.join(BRAIN_DIR, 'decisions');
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter(f => f.endsWith('.json'))
+    .map(f => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return null; } })
+    .filter(r => r && r.kind === 'request');
+}
+
+// 대표님 처리함에 보이는 요청 (파트장이 승격한 것만)
 function getPendingRequests() {
+  try { return _readRequests().filter(r => r.status === 'waiting'); } catch { return []; }
+}
+
+// 파트장이 검토할 대기 큐 (아직 대표님께 안 올라간 것)
+function getTriageRequests() {
   try {
-    const dir = path.join(BRAIN_DIR, 'decisions');
-    if (!fs.existsSync(dir)) return [];
-    return fs.readdirSync(dir)
-      .filter(f => f.endsWith('.json'))
-      .map(f => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return null; } })
-      .filter(r => r && r.kind === 'request' && r.status === 'waiting');
+    return _readRequests()
+      .filter(r => r.status === 'triage')
+      .sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
   } catch { return []; }
+}
+
+function countPendingRequests() {
+  try { return _readRequests().filter(r => r.status === 'waiting').length; } catch { return 0; }
+}
+
+// 파트장이 triage 요청을 대표님께 승격 (상한 초과면 거부)
+function escalateRequest(id, priority) {
+  try {
+    if (countPendingRequests() >= MAX_PENDING_REQUESTS) return { capped: true };
+    const filepath = path.join(BRAIN_DIR, 'decisions', `${id}.json`);
+    if (!fs.existsSync(filepath)) return null;
+    const item = JSON.parse(fs.readFileSync(filepath, 'utf8'));
+    if (item.status !== 'triage') return null;
+    item.status = 'waiting';
+    if (['high', 'medium', 'low'].includes(priority)) item.priority = priority;
+    item.escalatedAt = new Date().toISOString();
+    fs.writeFileSync(filepath, JSON.stringify(item, null, 2), 'utf8');
+    return item;
+  } catch { return null; }
+}
+
+// 파트장이 중복·사소한 triage 요청을 버림
+function dropRequest(id) {
+  try {
+    const filepath = path.join(BRAIN_DIR, 'decisions', `${id}.json`);
+    if (!fs.existsSync(filepath)) return null;
+    const item = JSON.parse(fs.readFileSync(filepath, 'utf8'));
+    item.status = 'dropped';
+    item.droppedAt = new Date().toISOString();
+    fs.writeFileSync(filepath, JSON.stringify(item, null, 2), 'utf8');
+    return item;
+  } catch { return null; }
 }
 
 // 요청에 사람이 응답(자료/작업 결과 제공) → 에이전트가 이걸로 작업 재개
@@ -799,9 +846,14 @@ module.exports = {
   rejectDecision,
   saveRequest,
   getPendingRequests,
+  getTriageRequests,
+  countPendingRequests,
+  escalateRequest,
+  dropRequest,
   fulfillRequest,
   dismissRequest,
   getFulfilledRequests,
+  MAX_PENDING_REQUESTS,
   saveSuggestion,
   getPendingSuggestions,
   acceptSuggestion,
