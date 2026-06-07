@@ -216,14 +216,15 @@ function getPendingDecisions() {
           return JSON.parse(content);
         } catch { return null; }
       })
-      .filter(d => d && d.status === 'waiting');
+      // kind 'request'(사람 도움 요청)는 제외 — 여긴 '결재(선택)'만
+      .filter(d => d && d.status === 'waiting' && d.kind !== 'request');
   } catch {
     return [];
   }
 }
 
 // ============================================================
-//  saveDecision: 새로운 결정 항목 저장
+//  saveDecision: 새로운 결정 항목 저장 (kind: 'decision')
 // ============================================================
 function saveDecision(decision) {
   try {
@@ -235,13 +236,14 @@ function saveDecision(decision) {
 
     const item = {
       id,
+      kind: 'decision',  // ★ 결재(선택) — request와 구분
       timestamp,
       status: 'waiting',  // waiting | approved | rejected
       question: decision.question,
       options: decision.options,
       priority: decision.priority || 'medium',  // high | medium | low
       recommended: decision.recommended,
-      requestedBy: decision.requestedBy,  // CEO | developer 등
+      requestedBy: decision.requestedBy,  // 파트장 | developer 등
       voteResults: decision.voteResults || null,  // ★ C) 에이전트 투표 결과
       chosenBy: null,  // 사용자 선택 시 입력
       chosenValue: null
@@ -323,6 +325,89 @@ function rejectDecision(decisionId, reason) {
     fs.writeFileSync(filepath, JSON.stringify(item, null, 2), 'utf8');
     return item;
   } catch { return null; }
+}
+
+// ============================================================
+//  사람 도움 요청 (need_human) — 결재함과 같은 저장소, kind='request'
+//
+//  결재(decision) = "둘 중 뭘 고를까요?" (선택)
+//  요청(request)  = "이건 제가 못 해요, 채워/해주세요" (사람이 자료·작업 제공)
+// ============================================================
+const REQUEST_TYPES = ['data', 'action', 'file', 'verify'];
+
+function saveRequest(req) {
+  try {
+    const dir = path.join(BRAIN_DIR, 'decisions');
+    fs.mkdirSync(dir, { recursive: true });
+
+    const id = req.id || ('req' + Date.now().toString(36) + Math.floor(Math.random() * 100).toString(36));
+    const item = {
+      id,
+      kind: 'request',  // ★ 사람 도움 요청
+      timestamp: new Date().toISOString(),
+      status: 'waiting',  // waiting | fulfilled | dismissed
+      requestType: REQUEST_TYPES.includes(req.requestType) ? req.requestType : 'data',
+      reason: (req.reason || '').slice(0, 500),       // 왜 사람이 필요한지
+      request: (req.request || '').slice(0, 500),     // 사람에게 부탁하는 구체 내용
+      requestedBy: req.requestedBy || '파트장',
+      priority: req.priority || 'medium',
+      userResponse: null
+    };
+    fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify(item, null, 2), 'utf8');
+    return item;
+  } catch { return null; }
+}
+
+// 대기 중인 사람 도움 요청 목록
+function getPendingRequests() {
+  try {
+    const dir = path.join(BRAIN_DIR, 'decisions');
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return null; } })
+      .filter(r => r && r.kind === 'request' && r.status === 'waiting');
+  } catch { return []; }
+}
+
+// 요청에 사람이 응답(자료/작업 결과 제공) → 에이전트가 이걸로 작업 재개
+function fulfillRequest(id, userResponse) {
+  try {
+    const filepath = path.join(BRAIN_DIR, 'decisions', `${id}.json`);
+    if (!fs.existsSync(filepath)) return null;
+    const item = JSON.parse(fs.readFileSync(filepath, 'utf8'));
+    item.status = 'fulfilled';
+    item.userResponse = (userResponse || '').slice(0, 2000);
+    item.fulfilledAt = new Date().toISOString();
+    fs.writeFileSync(filepath, JSON.stringify(item, null, 2), 'utf8');
+    return item;
+  } catch { return null; }
+}
+
+// 요청 무시(필요 없어짐)
+function dismissRequest(id) {
+  try {
+    const filepath = path.join(BRAIN_DIR, 'decisions', `${id}.json`);
+    if (!fs.existsSync(filepath)) return null;
+    const item = JSON.parse(fs.readFileSync(filepath, 'utf8'));
+    item.status = 'dismissed';
+    item.dismissedAt = new Date().toISOString();
+    fs.writeFileSync(filepath, JSON.stringify(item, null, 2), 'utf8');
+    return item;
+  } catch { return null; }
+}
+
+// 오늘 사람이 응답해준 요청들 → 브리핑에 주입 (에이전트가 실제 자료로 활용)
+function getFulfilledRequests() {
+  try {
+    const dir = path.join(BRAIN_DIR, 'decisions');
+    if (!fs.existsSync(dir)) return [];
+    const today = new Date().toISOString().slice(0, 10);
+    return fs.readdirSync(dir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return null; } })
+      .filter(r => r && r.kind === 'request' && r.status === 'fulfilled' && (r.fulfilledAt || '').startsWith(today));
+  } catch { return []; }
 }
 
 // ============================================================
@@ -631,6 +716,11 @@ module.exports = {
   saveDecision,
   approveDecision,
   rejectDecision,
+  saveRequest,
+  getPendingRequests,
+  fulfillRequest,
+  dismissRequest,
+  getFulfilledRequests,
   getGoals,
   getGoalsTree,
   getGoalsRaw,
