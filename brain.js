@@ -411,6 +411,87 @@ function getFulfilledRequests() {
 }
 
 // ============================================================
+//  제안 (suggestion) — 파트장이 중요한 아이디어를 대표님께 올림, kind='suggestion'
+//
+//  결재(decision) = 선택 / 요청(request) = 사람이 채움 / 제안(suggestion) = 채택 여부
+//  파트장이 필터: 사소하면 직접 처리, 중요하면(돈·전략·승인) 제안으로 올림
+// ============================================================
+const SUGGEST_CATEGORIES = ['budget', 'strategy', 'approval', 'other'];
+
+function saveSuggestion(s) {
+  try {
+    const dir = path.join(BRAIN_DIR, 'decisions');
+    fs.mkdirSync(dir, { recursive: true });
+    const id = s.id || ('sug' + Date.now().toString(36) + Math.floor(Math.random() * 100).toString(36));
+    const item = {
+      id,
+      kind: 'suggestion',  // ★ 제안
+      timestamp: new Date().toISOString(),
+      status: 'waiting',  // waiting | accepted | dismissed
+      title: (s.title || '').slice(0, 120),
+      category: SUGGEST_CATEGORIES.includes(s.category) ? s.category : 'other',
+      detail: (s.detail || '').slice(0, 800),    // 제안 내용·근거
+      impact: (s.impact || '').slice(0, 400),    // 기대 효과/리스크
+      requestedBy: s.requestedBy || '파트장',
+      priority: s.priority || 'medium',
+      userNote: null
+    };
+    fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify(item, null, 2), 'utf8');
+    return item;
+  } catch { return null; }
+}
+
+function getPendingSuggestions() {
+  try {
+    const dir = path.join(BRAIN_DIR, 'decisions');
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return null; } })
+      .filter(s => s && s.kind === 'suggestion' && s.status === 'waiting');
+  } catch { return []; }
+}
+
+function acceptSuggestion(id, note) {
+  try {
+    const filepath = path.join(BRAIN_DIR, 'decisions', `${id}.json`);
+    if (!fs.existsSync(filepath)) return null;
+    const item = JSON.parse(fs.readFileSync(filepath, 'utf8'));
+    item.status = 'accepted';
+    item.userNote = (note || '').slice(0, 500);
+    item.acceptedAt = new Date().toISOString();
+    fs.writeFileSync(filepath, JSON.stringify(item, null, 2), 'utf8');
+    return item;
+  } catch { return null; }
+}
+
+function dismissSuggestion(id, note) {
+  try {
+    const filepath = path.join(BRAIN_DIR, 'decisions', `${id}.json`);
+    if (!fs.existsSync(filepath)) return null;
+    const item = JSON.parse(fs.readFileSync(filepath, 'utf8'));
+    item.status = 'dismissed';
+    item.userNote = (note || '').slice(0, 500);
+    item.dismissedAt = new Date().toISOString();
+    fs.writeFileSync(filepath, JSON.stringify(item, null, 2), 'utf8');
+    return item;
+  } catch { return null; }
+}
+
+// 오늘 대표님이 채택한 제안 → 브리핑에 주입 (파트장이 실행에 옮기도록)
+function getAcceptedSuggestions() {
+  try {
+    const dir = path.join(BRAIN_DIR, 'decisions');
+    if (!fs.existsSync(dir)) return [];
+    const today = new Date().toISOString().slice(0, 10);
+    return fs.readdirSync(dir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return null; } })
+      .filter(s => s && s.kind === 'suggestion' && s.status === 'accepted' && (s.acceptedAt || '').startsWith(today));
+  } catch { return []; }
+}
+
+// ============================================================
 //  목표 관리 (goals.json) — 연간/월간/주간/일간 + 진행률
 //
 //  구조:
@@ -721,6 +802,11 @@ module.exports = {
   fulfillRequest,
   dismissRequest,
   getFulfilledRequests,
+  saveSuggestion,
+  getPendingSuggestions,
+  acceptSuggestion,
+  dismissSuggestion,
+  getAcceptedSuggestions,
   getGoals,
   getGoalsTree,
   getGoalsRaw,

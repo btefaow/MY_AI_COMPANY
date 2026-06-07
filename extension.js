@@ -90,23 +90,29 @@ const ACTION_TAGS_PROMPT = `
 
 규칙: 경로는 항상 상대 경로, 코드 생성 시 반드시 create_file 사용`;
 
-// ★ 모든 에이전트 공통 — 환각(거짓 지어내기) 방지 가드레일
+// ★ 모든 에이전트 공통 — 환각(거짓 지어내기) 방지 + 사람 요청 트리거 규칙
 const ANTI_HALLUCINATION_PROMPT = `
-## 정직 규칙 (매우 중요)
+## 정직 규칙과 사람 도움 요청 (매우 중요)
 
 당신은 인터넷에 접속할 수 없고, 실시간 정보를 모르며, 외부 시스템(이메일·결제·API·실제 바이어 연락)을 직접 실행할 수 없습니다.
+모르는 사실을 **절대 지어내지 마세요.** 그럴듯한 가짜 숫자·회사명·연락처는 회사에 해롭습니다.
 
-- 모르는 사실(시장 규모, 통계, 환율, 실제 회사명·연락처, 최신 규제 등)을 **절대 지어내지 마세요.** 그럴듯한 가짜 숫자/이름은 회사에 해롭습니다.
-- 추측이 필요하면 "추정치"라고 명확히 밝히고 근거를 답니다.
-- 실제 데이터·외부 실행이 필요하면, 지어내는 대신 **사람에게 요청**하세요:
+### ✋ 반드시 사람에게 요청할 것 (<need_human> 사용)
+아래에 해당하면 지어내지 말고 요청하세요:
+1. **실시간·최신·구체 수치** — 시장 규모, 점유율, 통계, 환율, 가격, 경쟁사 최신 동향, 실제 연락처
+2. **외부 실행** — 이메일/메시지 발송, 업로드, 결제, 실제 바이어·기관 연락, 외부 API 호출
+3. **사실 검증이 꼭 필요한 핵심 데이터** — 틀리면 의사결정을 망칠 숫자·규제·인증 정보
+4. **내가 못 읽는 자료** — PDF/엑셀/이미지 등의 실제 내용
 
 <need_human type="data|action|file|verify" reason="왜 사람이 필요한지" request="사람에게 부탁하는 구체적 내용"/>
+예: <need_human type="data" reason="실시간 시장 데이터는 조사가 필요" request="2025년 사우디 핀테크 시장 규모와 상위 3개 기업"/>
 
-예시:
-<need_human type="data" reason="실시간 시장 데이터는 조사가 필요합니다" request="2025년 사우디 핀테크 시장 규모와 상위 3개 기업을 알려주세요"/>
-<need_human type="action" reason="실제 이메일 발송은 제가 못 합니다" request="작성한 제안서를 거래처에 발송해 주세요"/>
+### 🙅 요청하지 말고 직접 할 것 (사소한 일로 사람을 귀찮게 하지 말 것)
+- 일반 지식으로 가능한 분석·정리·초안 작성 (문서·코드·기획안)
+- 이미 위 '사람이 제공한 자료'에 있는 데이터로 할 수 있는 일
+- 형식·구조·표현 같은 내부 결정 → 합리적 가정을 세우고 그냥 진행 (가정은 명시)
 
-위 '사람이 제공한 자료' 섹션에 사람이 준 데이터가 있으면, 그것은 사실이므로 적극 활용하세요.`;
+원칙: **"되돌릴 수 있고 내가 아는 걸로 가능"하면 직접, "실시간 사실·외부 실행"이면 요청.** 추측이 불가피하면 "추정치"라고 밝히고 근거를 답니다.`;
 
 // ★ 7단계: CEO 전용 — 팀원 위임 태그 사용법
 // JSON 플래너보다 훨씬 안정적. LLM이 응답 텍스트 안에 자연스럽게 포함 가능.
@@ -146,6 +152,24 @@ ${AGENTS.filter(a => a.id !== 'ceo').map(a => `- ${a.id}: ${a.role}`).join('\n')
 
 예시:
 <ask_user question="YouTube 콘텐츠 배포 전략은?" options="주 3회,주 5회,매일" recommended="주 3회"/>
+
+## 대표님께 제안하는 도구 (당신이 '필터' 역할)
+
+당신 자신 또는 팀원의 아이디어·개선점 중 **중요한 것만** 골라 대표님께 올립니다. 당신은 사소한 것과 중요한 것을 거르는 필터입니다.
+
+📌 **대표님께 올릴 것 (<suggest> 사용)** — 아래 중 하나라도 해당하면:
+- **돈·예산**: 비용 지출, 수익 모델 변경, 가격 정책
+- **전략·방향 전환**: 회사 목표·우선순위·시장 진입 방향을 바꾸는 것
+- **대표님 승인 필요**: 회사 외부에 드러나거나, 법적·윤리적 판단이 필요한 것
+
+🙅 **당신이 직접 처리할 것 (제안하지 말 것)**:
+- 되돌릴 수 있고 저비용인 내부 작업 (문서·코드·조사 초안, 작업 분배, 우선순위 미세조정)
+- → 이런 건 그냥 <delegate>로 실행하세요. 대표님을 귀찮게 하지 마세요.
+
+<suggest title="짧은 제목" category="budget|strategy|approval" detail="제안 내용과 근거" impact="기대 효과 또는 리스크"/>
+
+예시:
+<suggest title="이집트보다 사우디 먼저 집중" category="strategy" detail="사우디 Vision 2030으로 핀테크 예산이 크고 진입장벽이 낮음. 이집트는 외환규제로 6개월 후 진입 권장" impact="초기 리소스를 한 시장에 집중해 성과를 빨리 검증"/>
 
 ## 목표 관리 도구 (당신이 회사 목표의 관리자입니다)
 
@@ -434,6 +458,12 @@ ${summary}
       ? fulfilled.map(r => `- 요청: ${r.request}\n  → 사람이 제공: ${r.userResponse}`).join('\n')
       : '(아직 없음)';
 
+    // ★ 대표님이 채택한 제안 — 파트장이 실행에 옮겨야 함
+    const accepted = brain.getAcceptedSuggestions();
+    const acceptedSummary = accepted.length > 0
+      ? accepted.map(s => `- 채택: ${s.title}${s.userNote ? ` (대표님 메모: ${s.userNote})` : ''}`).join('\n')
+      : '(아직 없음)';
+
     return `당신은 스타트업 파트장입니다. 지금은 ${todayStr}, 자율 실행 세션 ${this._sessionCount || 1}회차입니다.
 
 ## 회사 비전
@@ -447,6 +477,9 @@ ${decisionsSummary}
 
 ## 사람이 제공한 자료 (실제 데이터 — 적극 활용, 이건 사실임)
 ${fulfilledSummary}
+
+## 대표님이 채택한 제안 (실행에 옮길 것)
+${acceptedSummary}
 
 ## 이전 실행 기록 (참고용 — 반복하지 말 것)
 ${previousReport ? previousReport : '(이전 기록이 없습니다)'}
@@ -677,16 +710,17 @@ ${result.output}
       return;
     }
 
-    // Step 3: CEO 응답에서 위임/질문/완료판단/목표관리/사람요청 태그 파싱
+    // Step 3: CEO 응답에서 위임/질문/완료판단/목표관리/사람요청/제안 태그 파싱
     let   delegates    = parseDelegateTags(ceoAnswer);
     const askUsers     = parseAskUserTags(ceoAnswer);
     const goalStatus   = parseGoalStatus(ceoAnswer);   // ★ 완료 판단
     const needHumans   = parseNeedHuman(ceoAnswer);    // ★ 사람 도움 요청
+    const suggestions  = parseSuggest(ceoAnswer);      // ★ 대표님께 제안
     const hasGoalTags  = /<(add_goal|set_progress|update_goal|delete_goal)\b/.test(ceoAnswer);
     let cleanCeoAnswer = ceoAnswer;
 
-    if (delegates.length || askUsers.length || goalStatus || needHumans.length || hasGoalTags) {
-      cleanCeoAnswer = stripNeedHuman(stripGoalTags(stripGoalStatus(stripDelegateTags(stripAskUserTags(ceoAnswer)))));
+    if (delegates.length || askUsers.length || goalStatus || needHumans.length || suggestions.length || hasGoalTags) {
+      cleanCeoAnswer = stripSuggest(stripNeedHuman(stripGoalTags(stripGoalStatus(stripDelegateTags(stripAskUserTags(ceoAnswer))))));
       webviewView.webview.postMessage({ type: 'update_bubble', text: cleanCeoAnswer });
     }
 
@@ -699,6 +733,12 @@ ${result.output}
     for (const nh of needHumans) {
       const reqItem = brain.saveRequest({ ...nh, requestedBy: '파트장' });
       if (reqItem) webviewView.webview.postMessage({ type: 'loop_status', text: `🙋 사람 도움 요청: ${nh.request.slice(0, 50)}` });
+    }
+
+    // ★ 파트장의 제안 → 대표님 처리함에 쌓기
+    for (const sg of suggestions) {
+      const sgItem = brain.saveSuggestion({ ...sg, requestedBy: '파트장' });
+      if (sgItem) webviewView.webview.postMessage({ type: 'loop_status', text: `💡 대표님께 제안: ${sg.title}` });
     }
 
     // ★ 결정 항목 저장 (C) 자동 투표 포함) 및 UI에 알림
@@ -1587,6 +1627,32 @@ function stripNeedHuman(text) {
 }
 
 // ──────────────────────────────────────────────────────────────
+//  parseSuggest: 파트장이 대표님께 올리는 제안 <suggest>
+//  반환: [{ title, category, detail, impact }]
+// ──────────────────────────────────────────────────────────────
+function parseSuggest(text) {
+  const found = [];
+  const r = /<suggest\s+[^>]*?\/>/g;
+  let m;
+  while ((m = r.exec(text)) !== null) {
+    const tag    = m[0];
+    const title  = _attr(tag, 'title');
+    const detail = _attr(tag, 'detail');
+    if (!title && !detail) continue;
+    found.push({
+      title:    title || '(제목 없음)',
+      category: _attr(tag, 'category') || 'other',
+      detail:   detail || '',
+      impact:   _attr(tag, 'impact') || ''
+    });
+  }
+  return found;
+}
+function stripSuggest(text) {
+  return text.replace(/<suggest\s+[^>]*\/>/g, '');
+}
+
+// ──────────────────────────────────────────────────────────────
 //  parseGoalStatus: 파트장 응답에서 <goal_status> 태그 추출
 //  반환: { state: 'done'|'continue', reason: string } | null
 // ──────────────────────────────────────────────────────────────
@@ -2017,10 +2083,11 @@ function getDashboardData() {
     : 'AI 회사';
 
   // ★ 결정 대기 항목
-  const pendingDecisions = brain.getPendingDecisions();
-  const pendingRequests  = brain.getPendingRequests();
+  const pendingDecisions  = brain.getPendingDecisions();
+  const pendingRequests   = brain.getPendingRequests();
+  const pendingSuggestions = brain.getPendingSuggestions();
 
-  return { agentStats, convCount: convFiles.length, recentActivities, recentFiles: recentFiles.slice(0, 8), companyName, brainDir, workspaceDir, pendingDecisions, pendingRequests };
+  return { agentStats, convCount: convFiles.length, recentActivities, recentFiles: recentFiles.slice(0, 8), companyName, brainDir, workspaceDir, pendingDecisions, pendingRequests, pendingSuggestions };
 }
 
 // ============================================================
@@ -2064,6 +2131,8 @@ class DashboardPanel {
       if (msg.type === 'reject_decision')    brain.rejectDecision(msg.decisionId, msg.reason);
       if (msg.type === 'fulfill_request')    brain.fulfillRequest(msg.requestId, msg.response);
       if (msg.type === 'dismiss_request')    brain.dismissRequest(msg.requestId);
+      if (msg.type === 'accept_suggestion')  brain.acceptSuggestion(msg.suggestionId, msg.note);
+      if (msg.type === 'dismiss_suggestion') brain.dismissSuggestion(msg.suggestionId, msg.note);
     });
   }
 
@@ -2200,6 +2269,26 @@ class DashboardPanel {
         </div>`).join('')
       : '<div class="decision-empty">AI가 도움을 요청하면 여기에 표시됩니다.</div>';
 
+    // ★ 제안 카드 (suggestion) — 파트장이 올린 중요 제안, 채택/반려
+    const catLabel = { budget: '💰 예산', strategy: '🧭 전략', approval: '✅ 승인필요', other: '💡 기타' };
+    const suggestionCards = (data.pendingSuggestions || []).length > 0
+      ? data.pendingSuggestions.map(s => `
+        <div class="suggest-card" style="border-left: 4px solid ${priorityColor[s.priority] || '#3fb950'}">
+          <div class="sug-header">
+            <span class="sug-cat">${catLabel[s.category] || '💡 기타'}</span>
+            <span class="sug-by">💡 ${_esc(s.requestedBy)} 제안</span>
+            <span class="sug-time">${s.timestamp ? _timeAgo(s.timestamp) : ''}</span>
+          </div>
+          <div class="sug-title">${_esc(s.title)}</div>
+          ${s.detail ? `<div class="sug-detail">${_esc(s.detail)}</div>` : ''}
+          ${s.impact ? `<div class="sug-impact">📈 기대효과/리스크: ${_esc(s.impact)}</div>` : ''}
+          <div class="sug-actions">
+            <button class="sug-accept" onclick="acceptSuggestion('${_esc(s.id)}')">✓ 채택</button>
+            <button class="sug-dismiss" onclick="dismissSuggestion('${_esc(s.id)}')">✕ 반려</button>
+          </div>
+        </div>`).join('')
+      : '<div class="decision-empty">파트장이 중요한 제안을 올리면 여기에 표시됩니다.</div>';
+
     return `<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -2321,6 +2410,21 @@ class DashboardPanel {
   .req-dismiss { padding: 6px 12px; background: transparent; color: #f85149; border: 1px solid #6e2a2a; border-radius: 5px; cursor: pointer; font-size: 12px; margin-left: auto; }
   .req-dismiss:hover { background: #5a1f1f; }
 
+  /* ── 제안(suggestion) 카드 ── */
+  .suggest-card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+  .sug-header { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .sug-cat { font-size: 11px; font-weight: 700; color: #3fb950; }
+  .sug-by { font-size: 11px; color: #8b949e; }
+  .sug-time { font-size: 11px; color: #6e7681; margin-left: auto; }
+  .sug-title { font-size: 13px; font-weight: 600; color: #e6edf3; margin-bottom: 5px; }
+  .sug-detail { font-size: 12px; color: #c9d1d9; line-height: 1.5; margin-bottom: 6px; }
+  .sug-impact { font-size: 11px; color: #d29922; margin-bottom: 8px; }
+  .sug-actions { display: flex; gap: 6px; }
+  .sug-accept { padding: 6px 14px; background: #238636; color: #fff; border: none; border-radius: 5px; cursor: pointer; font-size: 12px; font-weight: 500; }
+  .sug-accept:hover { background: #2ea043; }
+  .sug-dismiss { padding: 6px 12px; background: transparent; color: #f85149; border: 1px solid #6e2a2a; border-radius: 5px; cursor: pointer; font-size: 12px; margin-left: auto; }
+  .sug-dismiss:hover { background: #5a1f1f; }
+
   /* ── 하단 바 ── */
   .footer { margin-top: 24px; padding-top: 12px; border-top: 1px solid #21262d; display: flex; gap: 10px; flex-wrap: wrap; }
 </style>
@@ -2342,7 +2446,8 @@ class DashboardPanel {
   ${(() => {
     const dCount = data.pendingDecisions.length;
     const rCount = (data.pendingRequests || []).length;
-    const total  = dCount + rCount;
+    const sCount = (data.pendingSuggestions || []).length;
+    const total  = dCount + rCount + sCount;
     const active = total > 0;
     return `
   <div class="section" style="background: ${active ? '#1f6feb22' : '#161b22'}; border: 1px solid ${active ? '#1f6feb' : '#21262d'}; border-radius: 8px; padding: 14px; margin-bottom: 24px;">
@@ -2353,6 +2458,9 @@ class DashboardPanel {
 
     <div class="inbox-sub" style="margin-top:14px;">🙋 요청 — AI가 못 하는 일, 채워 주세요 ${rCount > 0 ? `(${rCount})` : ''}</div>
     ${requestCards}
+
+    <div class="inbox-sub" style="margin-top:14px;">💡 제안 — 파트장이 올린 중요 제안 ${sCount > 0 ? `(${sCount})` : ''}</div>
+    ${suggestionCards}
   </div>`;
   })()}
 
@@ -2453,6 +2561,20 @@ class DashboardPanel {
   function dismissRequest(id) {
     if (confirm('이 요청을 무시할까요?')) {
       vscode.postMessage({ type: 'dismiss_request', requestId: id });
+      refresh();
+    }
+  }
+  function acceptSuggestion(id) {
+    const note = prompt('채택합니다. 파트장에게 전할 메모 (선택):', '');
+    if (note !== null) {
+      vscode.postMessage({ type: 'accept_suggestion', suggestionId: id, note: note });
+      refresh();
+    }
+  }
+  function dismissSuggestion(id) {
+    const note = prompt('반려 사유 (선택):', '');
+    if (note !== null) {
+      vscode.postMessage({ type: 'dismiss_suggestion', suggestionId: id, note: note });
       refresh();
     }
   }
