@@ -88,7 +88,26 @@ const ACTION_TAGS_PROMPT = `
 파일 목록 조회:
 <list_files path="디렉토리경로/"/>
 
-규칙: 경로는 항상 상대 경로, 코드 생성 시 반드시 create_file 사용`;
+규칙: 경로는 항상 상대 경로, 코드 생성 시 반드시 create_file 사용
+
+## 파일 형식 규칙 (중요)
+
+당신은 텍스트만 생성할 수 있습니다. 내용 종류에 맞는 형식으로 저장하세요:
+
+| 내용 | 확장자 | 비고 |
+|------|--------|------|
+| 보고서·분석·전략·기획·문서 | **.md** | 기본값. 제목(#)·표(\|)·목록(-)으로 구조화 |
+| 표 형태의 순수 데이터 | **.csv** | 쉼표 구분. 엑셀에서 그대로 열림 |
+| 설정·구조화 데이터 | **.json** | |
+| 코드 | .py / .js / .ts 등 | 해당 언어 확장자 |
+
+⛔ **절대 만들지 말 것: .xlsx / .pdf / .docx / .pptx**
+이들은 압축된 바이너리 형식이라 텍스트로 만들면 **열리지 않는 깨진 파일**이 됩니다.
+- 표 데이터가 필요하면 → **.csv** 또는 **.md 표**로 저장하세요.
+- 실제 엑셀/PDF/워드 파일이 꼭 필요하면 → 직접 만들지 말고 사람에게 요청하세요:
+  <need_human type="action" reason="엑셀 파일 변환은 제가 못 합니다" request="이 CSV를 엑셀로 변환해 주세요"/>
+
+기본적으로 문서는 **.md로 저장**하는 것을 원칙으로 합니다.`;
 
 // ★ 모든 에이전트 공통 — 환각(거짓 지어내기) 방지 + 사람 요청 트리거 규칙
 const ANTI_HALLUCINATION_PROMPT = `
@@ -1852,9 +1871,23 @@ function stripActionTags(text) {
     .replace(/\n{3,}/g,'\n\n').trim();
 }
 
+// ★ 깨진 바이너리 파일 방지: 텍스트 모델은 .xlsx/.pdf/.docx를 못 만든다.
+//   이런 확장자로 저장하려 하면 안전하게 텍스트 형식으로 바꿔준다.
+function safeFileExtension(relPath) {
+  const m = relPath.match(/\.([a-zA-Z0-9]+)$/);
+  const ext = m ? m[1].toLowerCase() : '';
+  // 표 형식 바이너리 → .csv, 문서 바이너리 → .md
+  if (ext === 'xlsx' || ext === 'xls') return relPath.replace(/\.[a-zA-Z0-9]+$/, '.csv');
+  if (ext === 'docx' || ext === 'doc' || ext === 'pdf' || ext === 'pptx' || ext === 'ppt')
+    return relPath.replace(/\.[a-zA-Z0-9]+$/, '.md');
+  // 확장자 없는 문서성 파일은 .md로
+  if (ext === '') return relPath + '.md';
+  return relPath;
+}
+
 async function executeAction(action, workspaceRoot) {
   switch (action.type) {
-    case 'create_file': { const f=safePath(action.path,workspaceRoot); fs.mkdirSync(path.dirname(f),{recursive:true}); fs.writeFileSync(f,action.content,'utf8'); return {type:'create_file',path:action.path}; }
+    case 'create_file': { const safePathRel=safeFileExtension(action.path); const f=safePath(safePathRel,workspaceRoot); fs.mkdirSync(path.dirname(f),{recursive:true}); fs.writeFileSync(f,action.content,'utf8'); return {type:'create_file',path:safePathRel}; }
     case 'edit_file':   { const f=safePath(action.path,workspaceRoot); let c=fs.readFileSync(f,'utf8'); if(!c.includes(action.search)) throw new Error('찾을 텍스트 없음: '+action.search.slice(0,80)); fs.writeFileSync(f,c.replace(action.search,action.replace),'utf8'); return {type:'edit_file',path:action.path}; }
     case 'read_file':   { const f=safePath(action.path,workspaceRoot); return {type:'read_file',path:action.path,content:fs.readFileSync(f,'utf8').slice(0,8000)}; }
     case 'list_files':  { const f=safePath(action.path,workspaceRoot); return {type:'list_files',path:action.path,entries:fs.readdirSync(f,{withFileTypes:true}).map(e=>(e.isDirectory()?'📁 ':'📄 ')+e.name)}; }
