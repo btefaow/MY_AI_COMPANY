@@ -1890,7 +1890,8 @@ function applyGoalTags(text) {
 
   for (const ag of parseAddGoal(text)) {
     const created = brain.addGoal(ag.level, ag.title, { parentId: ag.parentId, weight: ag.weight, type: ag.type });
-    if (created) msgs.push(`🎯 목표 수립: [${levelLabel[ag.level]}] ${created.title}${ag.parentId ? ' (상위 연결)' : ''}`);
+    if (created && created.error) msgs.push(`⚠️ 목표 추가 실패: ${created.error}`);
+    else if (created) msgs.push(`🎯 목표 수립: [${levelLabel[ag.level]}] ${created.title}${ag.parentId ? ' (상위 연결)' : ''}`);
   }
   for (const ps of parseSetProgress(text)) {
     const updated = brain.updateGoalById(ps.id, { progress: ps.progress, note: ps.note });
@@ -2767,23 +2768,42 @@ class GoalDashboardPanel {
 
     this._panel.onDidDispose(() => { GoalDashboardPanel.currentPanel = null; });
     this._panel.webview.onDidReceiveMessage(msg => {
-      if (msg.type === 'add_goal')      brain.addGoal(msg.level || msg.period, msg.title, { parentId: msg.parentId, weight: msg.weight, type: msg.type });
-      if (msg.type === 'update_goal')   brain.updateGoalById(msg.id, msg.fields);
-      if (msg.type === 'delete_goal')   brain.deleteGoal(msg.id);
-      if (msg.type === 'refresh_goals') { /* 아래 _update로 갱신 */ }
+      if (msg.type === 'add_goal') {
+        const result = brain.addGoal(msg.level || msg.period, msg.title, {
+          parentId: msg.parentId, weight: msg.weight, type: msg.type, deadline: msg.deadline || null
+        });
+        if (result && result.code === 'LIMIT_EXCEEDED') {
+          vscode.window.showWarningMessage(result.error);
+          return;
+        }
+      } else if (msg.type === 'update_goal') {
+        brain.updateGoalById(msg.id, msg.fields);
+      } else if (msg.type === 'delete_goal') {
+        brain.deleteGoal(msg.id);
+      } else if (msg.type === 'archive_goal') {
+        brain.updateGoalById(msg.id, { status: 'archived' });
+      } else if (msg.type === 'restore_goal') {
+        brain.updateGoalById(msg.id, { status: 'active' });
+      } else if (msg.type === 'set_deadline') {
+        brain.updateGoalById(msg.id, { deadline: msg.deadline || null });
+      }
       this._update();
     });
   }
 
   _update() {
     try {
-      this._panel.webview.html = this._getHtml(brain.getGoalsTree(), brain.getGoals());
+      const tree     = brain.getGoalsTree();
+      const flat     = brain.getGoals();
+      const archived = brain.getArchivedGoals();
+      const dupes    = brain.getDuplicateCandidates();
+      this._panel.webview.html = this._getHtml(tree, flat, archived, dupes);
     } catch (err) {
       this._panel.webview.html = `<body style="color:white;padding:20px">❌ 오류: ${_esc(err.message)}</body>`;
     }
   }
 
-  _getHtml(tree, goalsFlat) {
+  _getHtml(tree, goalsFlat, archivedGoals, duplicates) {
     const LEVEL = {
       annual:  { label: '연간', emoji: '📅', accent: '#f0883e', child: 'monthly' },
       monthly: { label: '월간', emoji: '🗓️', accent: '#58a6ff', child: 'weekly' },
@@ -2796,18 +2816,41 @@ class GoalDashboardPanel {
       behind:   { label: '⚠️ 지연',  cls: 'pace-behind' },
       done:     { label: '🏁 완료',  cls: 'pace-done' }
     };
+    const LIMITS = brain.GOAL_LIMITS;
     const barColor = p => p >= 100 ? '#3fb950' : p >= 60 ? '#58a6ff' : p >= 30 ? '#d29922' : '#f85149';
+
+    // 마감일 배지 (서버사이드 계산)
+    const deadlineBadge = (deadline) => {
+      if (!deadline) return '';
+      const d = new Date(deadline);
+      if (isNaN(d)) return '';
+      const days = Math.round((d - Date.now()) / 86400000);
+      const lbl  = `${deadline.slice(0, 10)} (D${days >= 0 ? '-' : '+'}${Math.abs(days)})`;
+      const col  = days < 0 ? '#f85149' : days < 30 ? '#d29922' : days < 90 ? '#3fb950' : '#8b949e';
+      return `<span class="badge dl" style="background:${col}22;color:${col}">📅 ${lbl}</span>`;
+    };
+
+    // 레벨별 목표 수 · 상한 경고
+    const levelCounts = {};
+    ['annual','monthly','weekly','daily'].forEach(p => {
+      levelCounts[p] = (goalsFlat[p] || []).filter(g => g.status !== 'archived').length;
+    });
+    const limitWarnings = ['annual','monthly','weekly','daily']
+      .filter(p => levelCounts[p] >= LIMITS[p])
+      .map(p => `<span class="limit-warn">${LEVEL[p].label} ${levelCounts[p]}/${LIMITS[p]}개 ⚠️</span>`)
+      .join(' ');
 
     // 재귀 노드 렌더링
     const renderNode = (node, depth) => {
-      const lv = LEVEL[node.level] || LEVEL.daily;
+      const lv   = LEVEL[node.level] || LEVEL.daily;
       const pace = PACE[node.pace] || PACE.on_track;
-      const krText = (node.keyResults || []).map(k => `${_esc(k.metric)} ${k.current}/${k.target}`).join(' · ');
-      const weightBadge = node.parentId ? `<span class="badge weight" title="부모 기여 가중치">⚖ ${Math.round((node.weight || 0) * 100)}%</span>` : '';
-      const typeBadge = `<span class="badge type-${node.type}">${node.type === 'lead' ? 'lead·행동' : 'lag·결과'}</span>`;
-      const titleJson = JSON.stringify(_esc(node.title)).replace(/"/g, '&quot;');
+      const krText      = (node.keyResults || []).map(k => `${_esc(k.metric)} ${k.current}/${k.target}`).join(' · ');
+      const weightBadge = node.parentId ? `<span class="badge weight">⚖ ${Math.round((node.weight || 0) * 100)}%</span>` : '';
+      const typeBadge   = `<span class="badge type-${node.type}">${node.type === 'lead' ? 'lead·행동' : 'lag·결과'}</span>`;
+      const titleJson   = JSON.stringify(_esc(node.title)).replace(/"/g, '&quot;');
+      const dlBadge     = deadlineBadge(node.deadline);
+      const dlVal       = _esc(node.deadline || '');
 
-      // 자식이 있으면(자동 집계) 슬라이더 숨김, 없으면(리프) 진행률 직접 조정
       const progControl = node.isParent
         ? `<span class="auto-tag">자동 집계 (자식 가중합)</span>`
         : `<button class="g-btn" onclick="bump('${node.id}', ${Math.max(0, node.progress - 10)})">−10</button>
@@ -2828,6 +2871,7 @@ class GoalDashboardPanel {
               ${typeBadge}
               <span class="goal-title">${node.status === 'done' ? '✅ ' : ''}${_esc(node.title)}</span>
               ${weightBadge}
+              ${dlBadge}
               <span class="badge ${pace.cls}">${pace.label}</span>
               <span class="goal-pct" style="color:${barColor(node.progress)}">${node.progress}%</span>
             </div>
@@ -2839,10 +2883,12 @@ class GoalDashboardPanel {
             ${node.note ? `<div class="goal-note">📝 ${_esc(node.note)}</div>` : ''}
             <div class="goal-actions">
               ${progControl}
+              <button class="g-btn" onclick="setDeadline('${node.id}','${dlVal}')" title="마감일 설정">📅</button>
               <button class="g-btn" onclick="editWeight('${node.id}', ${Math.round((node.weight || 0) * 100)})" title="가중치 조정">⚖</button>
               <button class="g-btn edit" onclick="editGoal('${node.id}', ${titleJson})" title="제목 수정">✏️</button>
               ${addChildBtn}
-              <button class="g-btn del" onclick="delGoal('${node.id}')" title="삭제">🗑</button>
+              <button class="g-btn arc" onclick="archiveGoal('${node.id}')" title="보관함으로 이동">📦 보관</button>
+              <button class="g-btn del" onclick="delGoal('${node.id}')" title="완전 삭제">🗑</button>
             </div>
           </div>
           ${childrenHtml}
@@ -2853,10 +2899,50 @@ class GoalDashboardPanel {
       ? tree.map(n => renderNode(n, 0)).join('')
       : '<div class="goal-empty">아직 목표가 없습니다. 아래에서 연간 목표를 추가하거나, 파트장에게 "목표를 수립해줘"라고 요청하세요.</div>';
 
+    // ── 중복 의심 섹션 (Phase 2)
+    const dupHtml = duplicates.length === 0 ? '' : `
+      <div class="section-toggle" onclick="toggleSection('dupSection')">
+        ⚠️ 중복 의심 목표 ${duplicates.length}그룹 — 클릭하여 확인 ▼
+      </div>
+      <div id="dupSection" style="display:none;margin-bottom:16px;">
+        ${duplicates.map((group, gi) => `
+          <div class="dup-group">
+            <div class="dup-label">그룹 ${gi + 1} (${LEVEL[group[0].level]?.label || group[0].level} · ${group.length}개 유사)</div>
+            ${group.map(g => `
+              <div class="dup-item">
+                <span class="badge lvl" style="background:${(LEVEL[g.level]||LEVEL.daily).accent}22;color:${(LEVEL[g.level]||LEVEL.daily).accent}">${(LEVEL[g.level]||LEVEL.daily).emoji}</span>
+                <span class="dup-title">${_esc(g.title)}</span>
+                <button class="g-btn arc" onclick="archiveGoal('${g.id}')">📦 보관</button>
+                <button class="g-btn del" onclick="delGoal('${g.id}')">🗑</button>
+              </div>`).join('')}
+          </div>`).join('')}
+      </div>`;
+
+    // ── 보관함 섹션
+    const archHtml = archivedGoals.length === 0 ? '' : `
+      <div class="section-toggle" onclick="toggleSection('archSection')">
+        📦 보관함 (${archivedGoals.length}개) ▼
+      </div>
+      <div id="archSection" style="display:none;margin-bottom:16px;">
+        ${archivedGoals.map(g => {
+          const lv = LEVEL[g.level] || LEVEL.daily;
+          return `<div class="arch-item">
+            <span class="badge lvl" style="background:${lv.accent}22;color:${lv.accent}">${lv.emoji} ${lv.label}</span>
+            <span class="arch-title">${_esc(g.title)}</span>
+            ${g.deadline ? `<span class="badge dl" style="background:#30363d;color:#8b949e">📅 ${_esc(g.deadline)}</span>` : ''}
+            <button class="g-btn" onclick="restoreGoal('${g.id}')">↩ 복원</button>
+            <button class="g-btn del" onclick="delGoal('${g.id}')">🗑 삭제</button>
+          </div>`;
+        }).join('')}
+      </div>`;
+
     // 요약 통계
-    const all = [...goalsFlat.annual, ...goalsFlat.monthly, ...goalsFlat.weekly, ...goalsFlat.daily];
-    const annualAvg = goalsFlat.annual.length > 0 ? Math.round(goalsFlat.annual.reduce((s, g) => s + g.progress, 0) / goalsFlat.annual.length) : 0;
-    const doneCount = all.filter(g => g.status === 'done').length;
+    const all        = [...(goalsFlat.annual||[]), ...(goalsFlat.monthly||[]), ...(goalsFlat.weekly||[]), ...(goalsFlat.daily||[])];
+    const activeAll  = all.filter(g => g.status !== 'archived');
+    const annualAvg  = (goalsFlat.annual||[]).filter(g=>g.status!=='archived').length > 0
+      ? Math.round((goalsFlat.annual||[]).filter(g=>g.status!=='archived').reduce((s,g)=>s+g.progress,0) / (goalsFlat.annual||[]).filter(g=>g.status!=='archived').length)
+      : 0;
+    const doneCount   = activeAll.filter(g => g.status === 'done').length;
     const behindCount = tree.flatMap(function f(n){ return [n, ...(n.children||[]).flatMap(f)]; }).filter(n => n.pace === 'behind').length;
 
     return `<!DOCTYPE html>
@@ -2869,10 +2955,21 @@ class GoalDashboardPanel {
   .header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; padding-bottom:16px; border-bottom:1px solid #21262d; }
   .header-title { font-size:20px; font-weight:700; }
   .header-sub { font-size:13px; color:#8b949e; margin-top:2px; }
-  .summary { display:flex; gap:24px; margin:16px 0 20px; padding:14px 18px; background:#161b22; border:1px solid #21262d; border-radius:10px; }
+  .summary { display:flex; gap:20px; flex-wrap:wrap; margin:16px 0 12px; padding:14px 18px; background:#161b22; border:1px solid #21262d; border-radius:10px; }
   .sum-item { font-size:13px; color:#8b949e; }
   .sum-val { font-size:22px; font-weight:700; color:#58a6ff; display:block; }
+  .limit-bar { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 10px; font-size:11px; }
+  .limit-ok   { background:#3fb95022; color:#3fb950; padding:2px 8px; border-radius:8px; font-weight:600; }
+  .limit-warn { background:#f8514922; color:#f85149; padding:2px 8px; border-radius:8px; font-weight:600; }
   .legend { font-size:11px; color:#6e7681; margin-bottom:14px; display:flex; gap:14px; flex-wrap:wrap; }
+  .section-toggle { cursor:pointer; font-size:12px; font-weight:600; padding:7px 12px; background:#161b22; border:1px solid #30363d; border-radius:7px; margin-bottom:6px; color:#8b949e; }
+  .section-toggle:hover { color:#e6edf3; border-color:#58a6ff; }
+  .dup-group { background:#1c1010; border:1px solid #f8514922; border-radius:7px; padding:8px 10px; margin-bottom:6px; }
+  .dup-label { font-size:11px; color:#f85149; font-weight:600; margin-bottom:6px; }
+  .dup-item  { display:flex; align-items:center; gap:6px; padding:3px 0; }
+  .dup-title { font-size:12px; flex:1; }
+  .arch-item { display:flex; align-items:center; gap:6px; padding:5px 8px; background:#161b22; border:1px solid #21262d; border-radius:6px; margin-bottom:4px; }
+  .arch-title { font-size:12px; flex:1; color:#8b949e; }
   .node { }
   .goal-card { background:#161b22; border:1px solid #21262d; border-radius:8px; padding:10px 12px; margin-bottom:8px; }
   .goal-card.done { opacity:0.65; }
@@ -2880,10 +2977,10 @@ class GoalDashboardPanel {
   .goal-title { font-size:13px; font-weight:600; flex:1; min-width:120px; }
   .goal-pct { font-size:14px; font-weight:700; white-space:nowrap; }
   .badge { font-size:10px; padding:1px 6px; border-radius:10px; white-space:nowrap; font-weight:600; }
-  .badge.lvl { }
   .badge.type-lead { background:#1f6feb22; color:#58a6ff; }
   .badge.type-lag  { background:#8957e522; color:#a371f7; }
   .badge.weight { background:#30363d; color:#d29922; }
+  .badge.dl { }
   .pace-ahead  { background:#3fb95022; color:#3fb950; }
   .pace-on     { background:#1f6feb22; color:#58a6ff; }
   .pace-behind { background:#f8514922; color:#f85149; }
@@ -2898,11 +2995,13 @@ class GoalDashboardPanel {
   .g-btn:hover { background:#30363d; }
   .g-btn.del:hover { background:#7d1f1f; }
   .g-btn.add:hover { background:#1a7f37; }
+  .g-btn.arc:hover { background:#1f3858; }
   .g-slider { flex:1; min-width:60px; max-width:160px; accent-color:#58a6ff; }
   .auto-tag { font-size:11px; color:#8b949e; font-style:italic; }
   .goal-empty { color:#6e7681; font-size:13px; padding:30px; text-align:center; background:#161b22; border:1px dashed #30363d; border-radius:10px; }
-  .add-root { display:flex; gap:6px; margin-top:16px; padding-top:14px; border-top:1px solid #21262d; }
-  .add-input { flex:1; padding:6px 9px; background:#0d1117; color:#e6edf3; border:1px solid #30363d; border-radius:5px; font-size:12px; }
+  .add-root { display:flex; gap:6px; flex-wrap:wrap; margin-top:16px; padding-top:14px; border-top:1px solid #21262d; }
+  .add-input { flex:2; min-width:180px; padding:6px 9px; background:#0d1117; color:#e6edf3; border:1px solid #30363d; border-radius:5px; font-size:12px; }
+  .add-date { padding:6px 6px; background:#0d1117; color:#e6edf3; border:1px solid #30363d; border-radius:5px; font-size:12px; width:130px; }
   .add-sel { padding:6px; background:#0d1117; color:#e6edf3; border:1px solid #30363d; border-radius:5px; font-size:12px; }
   .add-btn { padding:6px 12px; background:#238636; color:#fff; border:none; border-radius:5px; cursor:pointer; font-size:12px; }
   .add-btn:hover { background:#2ea043; }
@@ -2921,19 +3020,35 @@ class GoalDashboardPanel {
 
   <div class="summary">
     <div class="sum-item"><span class="sum-val" style="color:#f0883e">${annualAvg}%</span>연간 목표 평균</div>
-    <div class="sum-item"><span class="sum-val">${all.length}</span>전체 목표 수</div>
+    <div class="sum-item"><span class="sum-val">${activeAll.length}</span>활성 목표 수</div>
     <div class="sum-item"><span class="sum-val" style="color:#3fb950">${doneCount}</span>완료</div>
-    <div class="sum-item"><span class="sum-val" style="color:${behindCount > 0 ? '#f85149' : '#8b949e'}">${behindCount}</span>⚠️ 지연 목표</div>
+    <div class="sum-item"><span class="sum-val" style="color:${behindCount > 0 ? '#f85149' : '#8b949e'}">${behindCount}</span>⚠️ 지연</div>
+    <div class="sum-item"><span class="sum-val" style="color:#8b949e">${archivedGoals.length}</span>📦 보관</div>
+  </div>
+
+  <div class="limit-bar">
+    ${['annual','monthly','weekly','daily'].map(p => {
+      const cnt = levelCounts[p];
+      const lim = LIMITS[p];
+      const cls = cnt >= lim ? 'limit-warn' : 'limit-ok';
+      return `<span class="${cls}">${LEVEL[p].label}: ${cnt}/${lim}</span>`;
+    }).join('')}
+    ${limitWarnings ? `<span style="font-size:11px;color:#f85149;align-self:center">← 상한 초과 시 AI 에이전트도 목표 추가 불가</span>` : ''}
   </div>
 
   <div class="legend">
     <span>⚖ = 부모 기여 가중치</span>
     <span>lead = 통제 가능한 행동</span>
     <span>lag = 결과 지표</span>
-    <span>│ 흰 세로선 = 기간 경과 위치 (진행률이 이보다 왼쪽이면 지연)</span>
+    <span>📅 = 마감일 (D- 초록:여유 / 노랑:30일내 / 빨강:초과)</span>
+    <span>│ 흰선 = 기간 경과 위치</span>
   </div>
 
+  ${dupHtml}
+
   <div class="tree">${treeHtml}</div>
+
+  ${archHtml}
 
   <div class="add-root">
     <select class="add-sel" id="rootLevel">
@@ -2942,32 +3057,50 @@ class GoalDashboardPanel {
       <option value="weekly">📆 주간</option>
       <option value="daily">☀️ 일간</option>
     </select>
-    <input class="add-input" id="rootTitle" placeholder="최상위 목표 추가 (부모 없음)..." onkeydown="if(event.key==='Enter')addRoot()"/>
+    <input class="add-input" id="rootTitle" placeholder="최상위 목표 제목..." onkeydown="if(event.key==='Enter')addRoot()"/>
+    <input class="add-date" id="rootDeadline" type="date" title="마감일 (선택)"/>
     <button class="add-btn" onclick="addRoot()">+ 추가</button>
   </div>
 
 <script>
   const vscode = acquireVsCodeApi();
   function refresh() { vscode.postMessage({ type: 'refresh_goals' }); }
+  function toggleSection(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  }
   function addRoot() {
-    const level = document.getElementById('rootLevel').value;
-    const title = document.getElementById('rootTitle').value.trim();
+    const level    = document.getElementById('rootLevel').value;
+    const title    = document.getElementById('rootTitle').value.trim();
+    const deadline = document.getElementById('rootDeadline').value || null;
     if (!title) return;
-    vscode.postMessage({ type: 'add_goal', level, title });
+    document.getElementById('rootTitle').value = '';
+    document.getElementById('rootDeadline').value = '';
+    vscode.postMessage({ type: 'add_goal', level, title, deadline });
   }
   function addChild(parentId, childLevel) {
     const title = prompt(childLevel + ' 하위 목표 제목:');
-    if (title && title.trim()) {
-      vscode.postMessage({ type: 'add_goal', level: childLevel, title: title.trim(), parentId });
-    }
+    if (!title || !title.trim()) return;
+    const dl = prompt('마감일 (YYYY-MM-DD, 없으면 빈칸):', '');
+    vscode.postMessage({ type: 'add_goal', level: childLevel, title: title.trim(), parentId, deadline: dl ? dl.trim() : null });
   }
   function bump(id, progress) {
     vscode.postMessage({ type: 'update_goal', id, fields: { progress: Number(progress) } });
   }
   function delGoal(id) {
-    if (confirm('이 목표를 삭제할까요? (자식은 상위로 승계됩니다)')) {
+    if (confirm('이 목표를 완전히 삭제할까요? (보관함에 두려면 📦 보관을 사용하세요)')) {
       vscode.postMessage({ type: 'delete_goal', id });
     }
+  }
+  function archiveGoal(id) {
+    vscode.postMessage({ type: 'archive_goal', id });
+  }
+  function restoreGoal(id) {
+    vscode.postMessage({ type: 'restore_goal', id });
+  }
+  function setDeadline(id, current) {
+    const d = prompt('마감일 (YYYY-MM-DD, 비우면 제거):', current || '');
+    if (d !== null) vscode.postMessage({ type: 'set_deadline', id, deadline: d.trim() || null });
   }
   function editGoal(id, current) {
     const next = prompt('목표 수정:', current);

@@ -549,6 +549,7 @@ const GOAL_PERIODS = ['annual', 'monthly', 'weekly', 'daily'];
 const GOAL_LABELS  = { annual: '연간', monthly: '월간', weekly: '주간', daily: '일간' };
 // 부모-자식 레벨 (자식 레벨 → 바로 위 부모 레벨)
 const PARENT_OF_LEVEL = { daily: 'weekly', weekly: 'monthly', monthly: 'annual', annual: null };
+const GOAL_LIMITS     = { annual: 5, monthly: 7, weekly: 10, daily: 14 };
 
 function _goalsPath() {
   return path.join(BRAIN_DIR, 'company', 'goals.json');
@@ -567,14 +568,16 @@ function _clampWeight(w) {
 
 // 한 목표 항목에 계층 필드 기본값 보정 (지연 마이그레이션)
 function _ensureGoalFields(item, level) {
-  if (item.level    === undefined) item.level    = level;
-  if (item.parentId === undefined) item.parentId = null;
-  if (item.weight   === undefined) item.weight   = 0;   // 0 = 미설정 → 정규화 시 균등 배분
+  if (item.level     === undefined) item.level     = level;
+  if (item.parentId  === undefined) item.parentId  = null;
+  if (item.weight    === undefined) item.weight    = 0;
   if (!Array.isArray(item.keyResults)) item.keyResults = [];
-  if (item.type     === undefined) item.type     = (level === 'daily' || level === 'weekly') ? 'lead' : 'lag';
-  if (item.progress === undefined) item.progress = 0;
-  if (item.status   === undefined) item.status   = 'active';
-  if (item.note     === undefined) item.note     = '';
+  if (item.type      === undefined) item.type      = (level === 'daily' || level === 'weekly') ? 'lead' : 'lag';
+  if (item.progress  === undefined) item.progress  = 0;
+  if (item.status    === undefined) item.status    = 'active';
+  if (item.note      === undefined) item.note      = '';
+  if (item.deadline  === undefined) item.deadline  = null;
+  if (item.startDate === undefined) item.startDate = null;
   return item;
 }
 
@@ -663,8 +666,14 @@ function recomputeRollup(goals) {
 }
 
 // ── 기간 경과 비율(0~1): 페이스 판정용
-function getElapsedRatio(level) {
+// goal 옵션 전달 시 startDate+deadline 기반으로 계산 (더 정확)
+function getElapsedRatio(level, goal) {
   const now = new Date();
+  if (goal && goal.startDate && goal.deadline) {
+    const s = new Date(goal.startDate);
+    const e = new Date(goal.deadline);
+    if (!isNaN(s) && !isNaN(e) && e > s) return _clamp(0, 1, (now - s) / (e - s));
+  }
   if (level === 'daily') {
     const s = new Date(now); s.setHours(0, 0, 0, 0);
     return _clamp(0, 1, (now - s) / (24 * 3600 * 1000));
@@ -686,8 +695,8 @@ function getElapsedRatio(level) {
 
 // ── 페이스: 진행률 vs 경과율 (±10%p 기준)
 function getPace(goal) {
-  if (goal.status === 'done') return 'done';
-  const elapsed = getElapsedRatio(goal.level);
+  if (goal.status === 'done' || goal.status === 'archived') return 'done';
+  const elapsed = getElapsedRatio(goal.level, goal);
   const prog = (goal.progress || 0) / 100;
   if (prog >= elapsed + 0.1) return 'ahead';
   if (prog <= elapsed - 0.1) return 'behind';
@@ -706,15 +715,19 @@ function getGoals() {
 // 대시보드용: 부모-자식 중첩 트리 + 페이스/경과율 포함
 function getGoalsTree() {
   const goals = getGoals();
-  const flat = _flat(goals);
+  // archived 제외 — 별도 getArchivedGoals() 로 조회
+  const flat = _flat(goals).filter(g => g.status !== 'archived');
   const byId = new Map(flat.map(g => [g.id, g]));
-  const cm = _childrenMap(goals);
+  const cm   = {};
+  flat.forEach(g => { if (g.parentId) (cm[g.parentId] = cm[g.parentId] || []).push(g); });
   const roots = flat.filter(g => !g.parentId || !byId.has(g.parentId));
   function build(g) {
+    const kids = cm[g.id] || [];
     return Object.assign({}, g, {
-      pace: getPace(g),
-      elapsedPct: Math.round(getElapsedRatio(g.level) * 100),
-      children: (cm[g.id] || []).map(build)
+      pace:       getPace(g),
+      elapsedPct: Math.round(getElapsedRatio(g.level, g) * 100),
+      isParent:   kids.length > 0,
+      children:   kids.map(build)
     });
   }
   roots.sort((a, b) => GOAL_PERIODS.indexOf(a.level) - GOAL_PERIODS.indexOf(b.level));
@@ -725,15 +738,27 @@ function getGoalsTree() {
 function addGoal(level, title, opts = {}) {
   if (!GOAL_PERIODS.includes(level) || !title) return null;
   const goals = getGoalsRaw();
+
+  // 레벨별 목표 상한 (archived 제외, skipLimitCheck 옵션으로 우회 가능)
+  if (!opts.skipLimitCheck) {
+    const activeCount = goals[level].filter(g => g.status !== 'archived').length;
+    if (activeCount >= GOAL_LIMITS[level]) {
+      return { error: `${GOAL_LABELS[level]} 목표는 최대 ${GOAL_LIMITS[level]}개까지 추가할 수 있습니다. 기존 목표를 완료하거나 보관한 뒤 추가해 주세요.`, code: 'LIMIT_EXCEEDED' };
+    }
+  }
+
   const parentId = opts.parentId && _findGoalRaw(goals, opts.parentId) ? opts.parentId : null;
+  const today = new Date().toISOString().slice(0, 10);
   const item = _ensureGoalFields({
     id: _newGoalId(),
     level,
-    title: String(title).slice(0, 200),
+    title:      String(title).slice(0, 200),
     parentId,
-    weight: opts.weight !== undefined ? _clampWeight(opts.weight) : 0,
+    weight:     opts.weight !== undefined ? _clampWeight(opts.weight) : 0,
     keyResults: Array.isArray(opts.keyResults) ? opts.keyResults.slice(0, 5) : [],
-    type: (opts.type === 'lead' || opts.type === 'lag') ? opts.type : undefined,
+    type:       (opts.type === 'lead' || opts.type === 'lag') ? opts.type : undefined,
+    deadline:   opts.deadline || null,
+    startDate:  opts.startDate || today,
     progress: 0, status: 'active', note: '', updatedAt: new Date().toISOString()
   }, level);
   goals[level].push(item);
@@ -763,6 +788,8 @@ function updateGoalById(id, fields) {
       if (fields.weight !== undefined) item.weight = _clampWeight(fields.weight);
       if (fields.type !== undefined && (fields.type === 'lead' || fields.type === 'lag')) item.type = fields.type;
       if (Array.isArray(fields.keyResults)) item.keyResults = fields.keyResults.slice(0, 5);
+      if ('deadline'  in fields) item.deadline  = fields.deadline  || null;
+      if ('startDate' in fields) item.startDate = fields.startDate || null;
       item.updatedAt = new Date().toISOString();
       saveGoals(goals);
       return item;
@@ -788,19 +815,74 @@ function deleteGoal(id) {
 
 // LLM 브리핑용 요약 (계층/가중치/페이스/KR 포함 → 파트장·목표관리자가 참조·갱신)
 function getGoalsSummary() {
-  const tree = getGoalsTree();
+  const tree = getGoalsTree();  // archived 제외됨
   if (tree.length === 0) return '(등록된 구조화 목표 없음)';
   const paceLabel = { ahead: '⏫앞섬', on_track: '✅정상', behind: '⚠️지연', done: '🏁완료' };
   let out = '';
   function render(node, depth) {
     const indent = '  '.repeat(depth);
-    const w  = node.parentId ? ` ·가중치${Math.round((node.weight || 0) * 100)}%` : '';
-    const kr = (node.keyResults || []).map(k => `${k.metric} ${k.current}/${k.target}`).join(', ');
-    out += `${indent}- [${node.id}] (${GOAL_LABELS[node.level]}/${node.type}) ${node.title} · 진행률 ${node.progress}%${w} · ${paceLabel[node.pace] || ''}${kr ? ` · KR: ${kr}` : ''}${node.note ? ` · 메모: ${node.note}` : ''}\n`;
+    const w   = node.parentId ? ` ·가중치${Math.round((node.weight || 0) * 100)}%` : '';
+    const kr  = (node.keyResults || []).map(k => `${k.metric} ${k.current}/${k.target}`).join(', ');
+    const dl  = node.deadline ? ` ·마감${node.deadline}` : '';
+    out += `${indent}- [${node.id}] (${GOAL_LABELS[node.level]}/${node.type}) ${node.title} · 진행률 ${node.progress}%${w}${dl} · ${paceLabel[node.pace] || ''}${kr ? ` · KR: ${kr}` : ''}${node.note ? ` · 메모: ${node.note}` : ''}\n`;
     (node.children || []).forEach(c => render(c, depth + 1));
   }
   tree.forEach(n => render(n, 0));
-  return out.trim();
+  // 레벨별 목표 수 현황
+  const goals = getGoalsRaw();
+  const counts = GOAL_PERIODS.map(p => {
+    const active = goals[p].filter(g => g.status !== 'archived').length;
+    return `${GOAL_LABELS[p]}:${active}/${GOAL_LIMITS[p]}`;
+  }).join(', ');
+  return `[목표 수: ${counts}]\n` + out.trim();
+}
+
+// 보관함: archived 상태 목표 목록
+function getArchivedGoals() {
+  const goals = getGoals();
+  return _flat(goals).filter(g => g.status === 'archived');
+}
+
+// 중복 의심 목표 그룹 (Jaccard ≥ threshold)
+function getDuplicateCandidates(threshold = 0.38) {
+  const goals = getGoals();
+  const flat  = _flat(goals).filter(g => g.status !== 'archived');
+  const stopWords = new Set(['및', '을', '를', '이', '가', '은', '는', '의', '에', '로', '으로', '위한', '통한', '대한', '관련', '의한', '에서', '에게', '까지', '부터']);
+
+  function tokenize(title) {
+    return title
+      .replace(/[()[\]·&,]/g, ' ')
+      .split(/\s+/)
+      .map(w => w.trim().toLowerCase())
+      .filter(w => w.length > 1 && !stopWords.has(w));
+  }
+
+  function jaccard(a, b) {
+    const sa = new Set(tokenize(a));
+    const sb = new Set(tokenize(b));
+    const inter = [...sa].filter(t => sb.has(t)).length;
+    const union = new Set([...sa, ...sb]).size;
+    return union === 0 ? 0 : inter / union;
+  }
+
+  const groups = [];
+  const used   = new Set();
+  for (let i = 0; i < flat.length; i++) {
+    if (used.has(flat[i].id)) continue;
+    const group = [flat[i]];
+    for (let j = i + 1; j < flat.length; j++) {
+      if (used.has(flat[j].id)) continue;
+      if (flat[i].level === flat[j].level && jaccard(flat[i].title, flat[j].title) >= threshold) {
+        group.push(flat[j]);
+        used.add(flat[j].id);
+      }
+    }
+    if (group.length > 1) {
+      used.add(flat[i].id);
+      groups.push(group);
+    }
+  }
+  return groups;
 }
 
 // ============================================================
@@ -885,6 +967,9 @@ module.exports = {
   updateGoalById,
   deleteGoal,
   getGoalsSummary,
+  getArchivedGoals,
+  getDuplicateCandidates,
+  GOAL_LIMITS,
   getPace,
   getElapsedRatio,
   weightedProgress,
