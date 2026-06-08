@@ -2424,10 +2424,14 @@ class DashboardPanel {
           <textarea class="req-input" id="req-${_esc(r.id)}" placeholder="여기에 직접 입력하거나, 📎 파일 첨부 또는 🤖 Gemini로 자동 조사..."></textarea>
           <div class="req-file-hint" id="hint-${_esc(r.id)}"></div>
           <div class="req-actions">
-            <button class="req-gemini" id="gbtn-${_esc(r.id)}" onclick="geminiResolve('${_esc(r.id)}', ${JSON.stringify(_esc(r.request))})">🤖 Gemini 조사</button>
-            <button class="req-attach" onclick="attachFile('${_esc(r.id)}')">📎 파일 첨부</button>
-            <button class="req-submit" onclick="fulfillRequest('${_esc(r.id)}')">✓ 제공하기</button>
-            <button class="req-dismiss" onclick="dismissRequest('${_esc(r.id)}')">✕ 무시</button>
+            <button class="req-gemini" id="gbtn-${_esc(r.id)}"
+              data-action="gemini" data-id="${_esc(r.id)}" data-question="${_esc(r.request)}">🤖 Gemini 조사</button>
+            <button class="req-attach"
+              data-action="attach" data-id="${_esc(r.id)}">📎 파일 첨부</button>
+            <button class="req-submit"
+              data-action="fulfill" data-id="${_esc(r.id)}">✓ 제공하기</button>
+            <button class="req-dismiss"
+              data-action="dismiss-req" data-id="${_esc(r.id)}">✕ 무시</button>
           </div>
         </div>`).join('')
       : '<div class="decision-empty">AI가 도움을 요청하면 여기에 표시됩니다.</div>';
@@ -2622,7 +2626,7 @@ class DashboardPanel {
     </div>
     <div class="header-right">
       <span class="refresh-time">마지막 갱신: ${now}</span>
-      <button class="btn gemini-settings-btn" onclick="toggleGeminiSettings()">🤖 Gemini ${data.geminiKeySet ? '<span style="color:#3fb950">●</span>' : '<span style="color:#f85149">○</span>'}</button>
+      <button class="btn gemini-settings-btn" id="geminiSettingsBtn">🤖 Gemini ${data.geminiKeySet ? '<span style="color:#3fb950">●</span>' : '<span style="color:#f85149">○</span>'}</button>
       <button class="btn" onclick="refresh()">🔄 새로고침</button>
     </div>
   </div>
@@ -2635,7 +2639,7 @@ class DashboardPanel {
       <input class="gemini-key-input" id="geminiKeyInput" type="password"
              placeholder="API 키 입력 (AQ.Ab8RN6I8U1sj...)"
              value="${data.geminiKeyMasked || ''}"/>
-      <button class="gemini-save-btn" onclick="saveGeminiKey()">저장</button>
+      <button class="gemini-save-btn" id="geminiSaveBtn">저장</button>
       <span class="gemini-saved-msg" id="geminiSavedMsg"></span>
     </div>
   </div>
@@ -2732,7 +2736,29 @@ class DashboardPanel {
   }
   // 이벤트 위임: 버튼이 매 새로고침마다 새로 그려져도 동작
   document.addEventListener('click', function(e) {
-    if (e.target.closest('#actMoreBtn')) toggleActivities();
+    if (e.target.closest('#actMoreBtn')) { toggleActivities(); return; }
+
+    // Gemini 설정 버튼 (헤더)
+    if (e.target.closest('#geminiSettingsBtn')) { toggleGeminiSettings(); return; }
+
+    // Gemini API 키 저장 버튼
+    if (e.target.closest('#geminiSaveBtn')) { saveGeminiKey(); return; }
+
+    // 요청 카드 버튼 (data-action 방식)
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const id = btn.dataset.id;
+    if (action === 'gemini') {
+      const question = btn.dataset.question || '';
+      geminiResolve(id, question);
+    } else if (action === 'attach') {
+      attachFile(id);
+    } else if (action === 'fulfill') {
+      fulfillRequest(id);
+    } else if (action === 'dismiss-req') {
+      dismissRequest(id);
+    }
   });
   // 페이지 로드(및 매 새로고침) 시 저장된 펼침 상태 복원
   applyActivityState();
