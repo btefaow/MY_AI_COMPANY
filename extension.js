@@ -2461,7 +2461,6 @@ class DashboardPanel {
 <html lang="ko">
 <head>
 <meta charset="UTF-8"/>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'nonce-${nonce}';">
 <style>
   *, *::before, *::after { box-sizing: border-box; }
   body { margin: 0; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -2621,6 +2620,11 @@ class DashboardPanel {
 </head>
 <body>
 
+  <!-- JS 진단: JS가 실행되면 즉시 숨겨짐. 보이면 JS가 차단된 것 -->
+  <div id="jsCheck" style="background:#f85149;color:white;padding:10px 14px;margin-bottom:12px;border-radius:6px;font-size:13px;font-weight:600;">
+    ⚠️ JavaScript 미실행 상태입니다 — Extension Development Host를 완전히 재시작해 주세요: <b>Shift+F5 → F5</b>
+  </div>
+
   <div class="header">
     <div>
       <div class="header-title">🏢 ${_esc(data.companyName)} 대시보드</div>
@@ -2704,7 +2708,10 @@ class DashboardPanel {
     <button class="btn btn-primary" data-action="open-folder" data-path="${_esc(path.join(data.workspaceDir, 'reports'))}">📄 리포트 보기</button>
   </div>
 
-<script nonce="${nonce}">
+<script>
+  // JS 실행 확인: 실행되면 경고 div 즉시 숨김
+  (function() { const d = document.getElementById('jsCheck'); if (d) d.style.display = 'none'; })();
+
   const vscode = acquireVsCodeApi();
 
   function refresh() { vscode.postMessage({ type: 'refresh' }); }
