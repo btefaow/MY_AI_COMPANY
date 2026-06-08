@@ -825,10 +825,28 @@ function setLoopInterval(minutes) {
     if (fs.existsSync(settingsPath)) {
       settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     }
-    settings.loopIntervalMin = Math.max(1, Math.min(180, Number(minutes) || 10)); // 1~180분 범위
+    settings.loopIntervalMin = Math.max(1, Math.min(180, Number(minutes) || 10));
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
     return settings.loopIntervalMin;
   } catch { return 30; }
+}
+
+// ── Gemini API 키 (settings.json에 저장 — gitignore 대상이라 GitHub 노출 없음)
+function getGeminiKey() {
+  try {
+    if (!fs.existsSync(_settingsPath())) return '';
+    return JSON.parse(fs.readFileSync(_settingsPath(), 'utf8')).geminiApiKey || '';
+  } catch { return ''; }
+}
+
+function setGeminiKey(key) {
+  try {
+    const p = _settingsPath();
+    const s = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : {};
+    s.geminiApiKey = (key || '').trim();
+    fs.writeFileSync(p, JSON.stringify(s, null, 2), 'utf8');
+    return true;
+  } catch { return false; }
 }
 
 module.exports = {
@@ -871,5 +889,7 @@ module.exports = {
   getElapsedRatio,
   weightedProgress,
   getLoopInterval,
-  setLoopInterval
+  setLoopInterval,
+  getGeminiKey,
+  setGeminiKey
 };

@@ -2195,8 +2195,11 @@ function getDashboardData() {
   const pendingRequests   = brain.getPendingRequests();
   const pendingSuggestions = brain.getPendingSuggestions();
   const triageCount        = brain.getTriageRequests().length;
+  const geminiKey          = brain.getGeminiKey();
+  const geminiKeySet       = geminiKey.length > 0;
+  const geminiKeyMasked    = geminiKeySet ? ('●●●●' + geminiKey.slice(-4)) : '';
 
-  return { agentStats, convCount: convFiles.length, recentActivities, recentFiles: recentFiles.slice(0, 8), companyName, brainDir, workspaceDir, pendingDecisions, pendingRequests, pendingSuggestions, triageCount };
+  return { agentStats, convCount: convFiles.length, recentActivities, recentFiles: recentFiles.slice(0, 8), companyName, brainDir, workspaceDir, pendingDecisions, pendingRequests, pendingSuggestions, triageCount, geminiKeySet, geminiKeyMasked };
 }
 
 // ============================================================
@@ -2270,6 +2273,25 @@ class DashboardPanel {
       if (msg.type === 'dismiss_request')    brain.dismissRequest(msg.requestId);
       if (msg.type === 'accept_suggestion')  brain.acceptSuggestion(msg.suggestionId, msg.note);
       if (msg.type === 'dismiss_suggestion') brain.dismissSuggestion(msg.suggestionId, msg.note);
+
+      // ★ Gemini API 키 저장
+      if (msg.type === 'set_gemini_key') {
+        brain.setGeminiKey(msg.key);
+        this._panel.webview.postMessage({ type: 'gemini_key_saved', masked: '****' + msg.key.slice(-4) });
+      }
+
+      // ★ Gemini로 요청 자동 해결 (버튼 클릭 시 수동 트리거)
+      if (msg.type === 'gemini_resolve') {
+        const apiKey = brain.getGeminiKey();
+        this._panel.webview.postMessage({ type: 'gemini_loading', requestId: msg.requestId });
+        callGemini(msg.question, apiKey)
+          .then(answer => {
+            this._panel.webview.postMessage({ type: 'gemini_done', requestId: msg.requestId, answer });
+          })
+          .catch(err => {
+            this._panel.webview.postMessage({ type: 'gemini_error', requestId: msg.requestId, error: err.message });
+          });
+      }
     });
   }
 
@@ -2398,9 +2420,11 @@ class DashboardPanel {
           </div>
           <div class="req-ask">${_esc(r.request)}</div>
           ${r.reason ? `<div class="req-reason">왜: ${_esc(r.reason)}</div>` : ''}
-          <textarea class="req-input" id="req-${_esc(r.id)}" placeholder="여기에 자료·결과를 직접 입력하거나, 📎 파일로 불러오세요..."></textarea>
+          <div class="gemini-status" id="gstatus-${_esc(r.id)}"></div>
+          <textarea class="req-input" id="req-${_esc(r.id)}" placeholder="여기에 직접 입력하거나, 📎 파일 첨부 또는 🤖 Gemini로 자동 조사..."></textarea>
           <div class="req-file-hint" id="hint-${_esc(r.id)}"></div>
           <div class="req-actions">
+            <button class="req-gemini" id="gbtn-${_esc(r.id)}" onclick="geminiResolve('${_esc(r.id)}', ${JSON.stringify(_esc(r.request))})">🤖 Gemini 조사</button>
             <button class="req-attach" onclick="attachFile('${_esc(r.id)}')">📎 파일 첨부</button>
             <button class="req-submit" onclick="fulfillRequest('${_esc(r.id)}')">✓ 제공하기</button>
             <button class="req-dismiss" onclick="dismissRequest('${_esc(r.id)}')">✕ 무시</button>
@@ -2551,6 +2575,24 @@ class DashboardPanel {
   .req-attach { padding: 6px 10px; background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 5px; cursor: pointer; font-size: 12px; }
   .req-attach:hover { background: #30363d; }
   .req-file-hint { font-size: 11px; color: #3fb950; margin-bottom: 6px; min-height: 0; }
+  .req-gemini { padding: 6px 12px; background: #1a3a5c; color: #58a6ff; border: 1px solid #1f6feb; border-radius: 5px; cursor: pointer; font-size: 12px; font-weight: 500; }
+  .req-gemini:hover { background: #1f6feb; color: #fff; }
+  .req-gemini:disabled { opacity: 0.5; cursor: not-allowed; }
+  .gemini-status { font-size: 11px; margin-bottom: 6px; min-height: 0; }
+  .gemini-status.loading { color: #d29922; }
+  .gemini-status.error { color: #f85149; }
+  .gemini-status.done { color: #3fb950; }
+
+  /* Gemini 설정 패널 */
+  .gemini-panel { background: #161b22; border: 1px solid #1f6feb; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
+  .gemini-panel-title { font-size: 13px; font-weight: 700; color: #58a6ff; margin-bottom: 4px; }
+  .gemini-panel-desc { font-size: 11px; color: #8b949e; margin-bottom: 10px; }
+  .gemini-panel-row { display: flex; gap: 8px; align-items: center; }
+  .gemini-key-input { flex: 1; padding: 6px 10px; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 5px; font-size: 12px; font-family: monospace; }
+  .gemini-save-btn { padding: 6px 14px; background: #1f6feb; color: #fff; border: none; border-radius: 5px; cursor: pointer; font-size: 12px; font-weight: 500; }
+  .gemini-save-btn:hover { background: #388bfd; }
+  .gemini-saved-msg { font-size: 11px; color: #3fb950; }
+  .gemini-settings-btn { font-size: 11px; }
 
   /* ── 제안(suggestion) 카드 ── */
   .suggest-card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
@@ -2580,7 +2622,21 @@ class DashboardPanel {
     </div>
     <div class="header-right">
       <span class="refresh-time">마지막 갱신: ${now}</span>
+      <button class="btn gemini-settings-btn" onclick="toggleGeminiSettings()">🤖 Gemini ${data.geminiKeySet ? '<span style="color:#3fb950">●</span>' : '<span style="color:#f85149">○</span>'}</button>
       <button class="btn" onclick="refresh()">🔄 새로고침</button>
+    </div>
+  </div>
+
+  <!-- Gemini API 키 설정 패널 (접었다 폈다) -->
+  <div class="gemini-panel" id="geminiPanel" style="display:none">
+    <div class="gemini-panel-title">🤖 Gemini API 설정</div>
+    <div class="gemini-panel-desc">API 키는 로컬 settings.json에만 저장됩니다 (GitHub 미업로드).</div>
+    <div class="gemini-panel-row">
+      <input class="gemini-key-input" id="geminiKeyInput" type="password"
+             placeholder="API 키 입력 (AQ.Ab8RN6I8U1sj...)"
+             value="${data.geminiKeyMasked || ''}"/>
+      <button class="gemini-save-btn" onclick="saveGeminiKey()">저장</button>
+      <span class="gemini-saved-msg" id="geminiSavedMsg"></span>
     </div>
   </div>
 
@@ -2704,7 +2760,27 @@ class DashboardPanel {
     vscode.postMessage({ type: 'open_file_picker', requestId: id });
   }
 
-  // 파일 내용이 로드되면 입력창에 자동으로 채워줌
+  // Gemini 설정 패널 토글
+  function toggleGeminiSettings() {
+    const p = document.getElementById('geminiPanel');
+    if (p) p.style.display = p.style.display === 'none' ? 'block' : 'none';
+  }
+  function saveGeminiKey() {
+    const key = document.getElementById('geminiKeyInput').value.trim();
+    if (!key) { alert('API 키를 입력해 주세요.'); return; }
+    vscode.postMessage({ type: 'set_gemini_key', key });
+  }
+
+  // Gemini로 요청 자동 조사 (수동 트리거)
+  function geminiResolve(id, question) {
+    const btn = document.getElementById('gbtn-' + id);
+    const status = document.getElementById('gstatus-' + id);
+    if (btn) { btn.disabled = true; btn.textContent = '🤖 조사 중...'; }
+    if (status) { status.className = 'gemini-status loading'; status.textContent = '⏳ Gemini가 Google 검색으로 조사 중...'; }
+    vscode.postMessage({ type: 'gemini_resolve', requestId: id, question });
+  }
+
+  // 파일·Gemini 응답 처리
   window.addEventListener('message', e => {
     const msg = e.data;
     if (msg.type === 'file_loaded') {
@@ -2712,6 +2788,26 @@ class DashboardPanel {
       if (el) el.value = msg.content;
       const hint = document.getElementById('hint-' + msg.requestId);
       if (hint) hint.textContent = '📎 ' + msg.fileName + ' (' + msg.content.length + '자) 불러옴 — 확인 후 제공하기를 눌러주세요';
+    }
+    if (msg.type === 'gemini_done') {
+      const el = document.getElementById('req-' + msg.requestId);
+      if (el) el.value = msg.answer;
+      const btn = document.getElementById('gbtn-' + msg.requestId);
+      if (btn) { btn.disabled = false; btn.textContent = '🤖 Gemini 조사'; }
+      const status = document.getElementById('gstatus-' + msg.requestId);
+      if (status) { status.className = 'gemini-status done'; status.textContent = '✅ Gemini 조사 완료 — 내용 확인 후 제공하기를 눌러주세요'; }
+    }
+    if (msg.type === 'gemini_error') {
+      const btn = document.getElementById('gbtn-' + msg.requestId);
+      if (btn) { btn.disabled = false; btn.textContent = '🤖 Gemini 조사'; }
+      const status = document.getElementById('gstatus-' + msg.requestId);
+      if (status) { status.className = 'gemini-status error'; status.textContent = '❌ ' + msg.error; }
+    }
+    if (msg.type === 'gemini_key_saved') {
+      const m = document.getElementById('geminiSavedMsg');
+      if (m) { m.textContent = '✅ 저장됨 (' + msg.masked + ')'; setTimeout(() => { if(m) m.textContent=''; }, 3000); }
+      // 헤더 상태 업데이트를 위해 새로고침
+      setTimeout(() => vscode.postMessage({ type: 'refresh' }), 500);
     }
   });
   function dismissRequest(id) {
@@ -2986,6 +3082,56 @@ class GoalDashboardPanel {
 </body>
 </html>`;
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  callGemini: Gemini API (Google Search 그라운딩)로 자료 요청 자동 해결
+//  - 실시간 웹 검색 결과를 바탕으로 답변 생성
+//  - 무료 티어: gemini-1.5-flash, 분당 15건, 일 1M 토큰
+// ─────────────────────────────────────────────────────────────
+async function callGemini(question, apiKey) {
+  if (!apiKey) throw new Error('Gemini API 키가 설정되지 않았습니다.');
+
+  const systemPrompt = `당신은 비즈니스 시장조사 전문가입니다.
+아래 질문에 대해 최신 정보를 바탕으로 명확하고 구체적으로 답변하세요.
+숫자·통계가 있으면 반드시 출처(기관명 또는 연도)를 명시하세요.
+확실하지 않은 정보는 "[추정]" 또는 "[출처 미확인]"으로 표시하세요.
+답변은 한국어로, 마크다운 형식으로 작성하세요.`;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  const body = {
+    system_instruction: { parts: [{ text: systemPrompt }] },
+    contents: [{ parts: [{ text: question }] }],
+    tools: [{ google_search: {} }]  // Google Search 그라운딩 활성화
+  };
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const msg = err?.error?.message || `HTTP ${res.status}`;
+    throw new Error(`Gemini API 오류: ${msg}`);
+  }
+
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('').trim();
+  if (!text) throw new Error('Gemini 응답이 비어있습니다.');
+
+  // 검색 소스가 있으면 하단에 출처 목록 추가
+  const grounds = data?.candidates?.[0]?.groundingMetadata?.groundingChunks;
+  if (grounds && grounds.length > 0) {
+    const sources = grounds
+      .filter(g => g.web?.uri)
+      .slice(0, 5)
+      .map(g => `- [${g.web.title || g.web.uri}](${g.web.uri})`)
+      .join('\n');
+    return `${text}\n\n---\n**참고 출처:**\n${sources}`;
+  }
+  return text;
 }
 
 function _timeAgo(date) {
