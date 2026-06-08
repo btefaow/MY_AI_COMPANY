@@ -2387,7 +2387,7 @@ class DashboardPanel {
           const topOption = d.voteResults && d.voteResults.recommendation;
 
           // 투표 막대 (옵션별)
-          const voteBars = d.voteResults ? d.options.map(opt => {
+          const voteBars = (d.voteResults && Array.isArray(d.options)) ? d.options.map(opt => {
             const c = voteMap[opt] || 0;
             const pct = maxVote > 0 ? Math.round(c / maxVote * 100) : 0;
             const isTop = opt === topOption && c > 0;
@@ -2407,7 +2407,7 @@ class DashboardPanel {
             : '';
 
           // 승인 버튼 (옵션별, 득표 표시) — 최다 득표는 강조
-          const approveBtns = d.options.map(opt => {
+          const approveBtns = (d.options || []).map(opt => {
             const c = voteMap[opt] || 0;
             const isTop = opt === topOption && c > 0;
             return `<button class="appr-btn ${isTop ? 'top' : ''}" data-action="approve" data-decision-id="${_esc(d.id)}" data-option="${_esc(opt)}">✓ ${_esc(opt)}${d.voteResults ? ` (${c})` : ''}</button>`;

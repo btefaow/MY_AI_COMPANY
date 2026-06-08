@@ -216,8 +216,8 @@ function getPendingDecisions() {
           return JSON.parse(content);
         } catch { return null; }
       })
-      // kind 'request'(사람 도움 요청)는 제외 — 여긴 '결재(선택)'만
-      .filter(d => d && d.status === 'waiting' && d.kind !== 'request');
+      // kind === 'decision' 만 포함 — request·suggestion은 각자 별도 함수로 조회
+      .filter(d => d && d.status === 'waiting' && d.kind === 'decision');
   } catch {
     return [];
   }
