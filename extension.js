@@ -2305,6 +2305,7 @@ class DashboardPanel {
   }
 
   _getHtml(data) {
+    const nonce = require('crypto').randomBytes(16).toString('hex');
     const now = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
 
     const statusLabel  = { active: '🟢 활성', recent: '🟡 최근', idle: '⚫ 대기' };
@@ -2337,7 +2338,7 @@ class DashboardPanel {
     // 8개 초과 시 "더 보기" 토글 버튼 (data 속성으로 숨김 개수 전달)
     const activityHidden = data.recentActivities.length - ACT_VISIBLE;
     const activityToggle = activityHidden > 0
-      ? `<button class="more-btn" id="actMoreBtn" data-hidden="${activityHidden}">▼ 더 보기 (${activityHidden}개 더)</button>`
+      ? `<button class="more-btn" id="actMoreBtn" data-action="toggle-activities" data-hidden="${activityHidden}">▼ 더 보기 (${activityHidden}개 더)</button>`
       : '';
 
     const fileRows = data.recentFiles.length > 0
@@ -2382,7 +2383,7 @@ class DashboardPanel {
           const approveBtns = d.options.map(opt => {
             const c = voteMap[opt] || 0;
             const isTop = opt === topOption && c > 0;
-            return `<button class="appr-btn ${isTop ? 'top' : ''}" onclick="approveDecision('${_esc(d.id)}','${_esc(opt)}')">✓ ${_esc(opt)}${d.voteResults ? ` (${c})` : ''}</button>`;
+            return `<button class="appr-btn ${isTop ? 'top' : ''}" data-action="approve" data-decision-id="${_esc(d.id)}" data-option="${_esc(opt)}">✓ ${_esc(opt)}${d.voteResults ? ` (${c})` : ''}</button>`;
           }).join('');
 
           return `
@@ -2402,7 +2403,7 @@ class DashboardPanel {
           <div class="appr-row">
             <span class="appr-label">승인할 안 선택 →</span>
             ${approveBtns}
-            <button class="reject-btn" onclick="rejectDecision('${_esc(d.id)}')">✕ 보류</button>
+            <button class="reject-btn" data-action="reject" data-decision-id="${_esc(d.id)}">✕ 보류</button>
           </div>
         </div>`;
         }).join('')
@@ -2450,8 +2451,8 @@ class DashboardPanel {
           ${s.detail ? `<div class="sug-detail">${_esc(s.detail)}</div>` : ''}
           ${s.impact ? `<div class="sug-impact">📈 기대효과/리스크: ${_esc(s.impact)}</div>` : ''}
           <div class="sug-actions">
-            <button class="sug-accept" onclick="acceptSuggestion('${_esc(s.id)}')">✓ 채택</button>
-            <button class="sug-dismiss" onclick="dismissSuggestion('${_esc(s.id)}')">✕ 반려</button>
+            <button class="sug-accept" data-action="accept-suggestion" data-suggestion-id="${_esc(s.id)}">✓ 채택</button>
+            <button class="sug-dismiss" data-action="dismiss-suggestion" data-suggestion-id="${_esc(s.id)}">✕ 반려</button>
           </div>
         </div>`).join('')
       : '<div class="decision-empty">파트장이 중요한 제안을 올리면 여기에 표시됩니다.</div>';
@@ -2460,6 +2461,7 @@ class DashboardPanel {
 <html lang="ko">
 <head>
 <meta charset="UTF-8"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'nonce-${nonce}';">
 <style>
   *, *::before, *::after { box-sizing: border-box; }
   body { margin: 0; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -2626,8 +2628,8 @@ class DashboardPanel {
     </div>
     <div class="header-right">
       <span class="refresh-time">마지막 갱신: ${now}</span>
-      <button class="btn gemini-settings-btn" id="geminiSettingsBtn" onclick="toggleGeminiSettings()">🤖 Gemini ${data.geminiKeySet ? '<span style="color:#3fb950">●</span>' : '<span style="color:#f85149">○</span>'}</button>
-      <button class="btn" onclick="refresh()">🔄 새로고침</button>
+      <button class="btn gemini-settings-btn" id="geminiSettingsBtn" data-action="toggle-gemini-settings">🤖 Gemini ${data.geminiKeySet ? '<span style="color:#3fb950">●</span>' : '<span style="color:#f85149">○</span>'}</button>
+      <button class="btn" data-action="refresh">🔄 새로고침</button>
     </div>
   </div>
 
@@ -2639,7 +2641,7 @@ class DashboardPanel {
       <input class="gemini-key-input" id="geminiKeyInput" type="password"
              placeholder="API 키 입력 (AQ.Ab8RN6I8U1sj...)"
              value="${data.geminiKeyMasked || ''}"/>
-      <button class="gemini-save-btn" id="geminiSaveBtn" onclick="saveGeminiKey()">저장</button>
+      <button class="gemini-save-btn" id="geminiSaveBtn" data-action="save-gemini-key">저장</button>
       <span class="gemini-saved-msg" id="geminiSavedMsg"></span>
     </div>
   </div>
@@ -2697,27 +2699,16 @@ class DashboardPanel {
   </div>
 
   <div class="footer">
-    <button class="btn" onclick="openBrain()">🧠 뇌 폴더 편집</button>
-    <button class="btn" onclick="openFolder('${_esc(data.workspaceDir).replace(/\\/g, '\\\\')}')">📁 workspace 열기</button>
-    <button class="btn btn-primary" onclick="openFolder('${_esc(data.workspaceDir + path.sep + 'reports').replace(/\\/g, '\\\\')}')">📄 리포트 보기</button>
+    <button class="btn" data-action="open-brain">🧠 뇌 폴더 편집</button>
+    <button class="btn" data-action="open-folder" data-path="${_esc(data.workspaceDir)}">📁 workspace 열기</button>
+    <button class="btn btn-primary" data-action="open-folder" data-path="${_esc(path.join(data.workspaceDir, 'reports'))}">📄 리포트 보기</button>
   </div>
 
-<script>
+<script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
-  function refresh()          { vscode.postMessage({ type: 'refresh' }); }
-  function openBrain()        { vscode.postMessage({ type: 'open_brain' }); }
-  function openFolder(p)      { vscode.postMessage({ type: 'open_folder', path: p }); }
 
-  // 최근 생성 파일 클릭 → 열기 (이벤트 위임: 백슬래시 경로도 안전)
-  document.addEventListener('click', function(e) {
-    const row = e.target.closest('.file-row.clickable');
-    if (row && row.dataset.path) {
-      vscode.postMessage({ type: 'open_file', path: row.dataset.path });
-    }
-  });
+  function refresh() { vscode.postMessage({ type: 'refresh' }); }
 
-  // 오늘 활동 "더 보기" / "접기" 토글
-  // ★ 상태를 webview state에 저장 → 30초 자동 새로고침 후에도 펼침 유지
   function applyActivityState() {
     const btn = document.getElementById('actMoreBtn');
     const hiddens = document.querySelectorAll('.act-hidden');
@@ -2730,57 +2721,9 @@ class DashboardPanel {
   }
   function toggleActivities() {
     const prev = (vscode.getState() || {});
-    const next = Object.assign({}, prev, { actExpanded: !prev.actExpanded });
-    vscode.setState(next);
+    vscode.setState(Object.assign({}, prev, { actExpanded: !prev.actExpanded }));
     applyActivityState();
   }
-  // 이벤트 위임: 버튼이 매 새로고침마다 새로 그려져도 동작
-  document.addEventListener('click', function(e) {
-    if (e.target.closest('#actMoreBtn')) { toggleActivities(); return; }
-
-    // 요청 카드 버튼 (data-action 방식)
-    const btn = e.target.closest('[data-action]');
-    if (!btn) return;
-    const action = btn.dataset.action;
-    const id = btn.dataset.id;
-    if (action === 'gemini') {
-      const question = btn.dataset.question || '';
-      geminiResolve(id, question);
-    } else if (action === 'attach') {
-      attachFile(id);
-    } else if (action === 'fulfill') {
-      fulfillRequest(id);
-    } else if (action === 'dismiss-req') {
-      dismissRequest(id);
-    }
-  });
-  // 페이지 로드(및 매 새로고침) 시 저장된 펼침 상태 복원
-  applyActivityState();
-  function approveDecision(id, value) {
-    if (confirm('이 안으로 승인하시겠습니까?\n\n선택: ' + value)) {
-      vscode.postMessage({ type: 'approve_decision', decisionId: id, chosenValue: value });
-      refresh();
-    }
-  }
-  function rejectDecision(id) {
-    const reason = prompt('보류/반려 사유 (선택):', '');
-    if (reason !== null) {
-      vscode.postMessage({ type: 'reject_decision', decisionId: id, reason: reason });
-      refresh();
-    }
-  }
-  function fulfillRequest(id) {
-    const el = document.getElementById('req-' + id);
-    const response = el ? el.value.trim() : '';
-    if (!response) { alert('제공할 자료/결과를 입력하거나 📎 파일을 첨부해 주세요.'); return; }
-    vscode.postMessage({ type: 'fulfill_request', requestId: id, response: response });
-    refresh();
-  }
-  function attachFile(id) {
-    vscode.postMessage({ type: 'open_file_picker', requestId: id });
-  }
-
-  // Gemini 설정 패널 토글
   function toggleGeminiSettings() {
     const p = document.getElementById('geminiPanel');
     if (p) p.style.display = p.style.display === 'none' ? 'block' : 'none';
@@ -2790,17 +2733,87 @@ class DashboardPanel {
     if (!key) { alert('API 키를 입력해 주세요.'); return; }
     vscode.postMessage({ type: 'set_gemini_key', key });
   }
-
-  // Gemini로 요청 자동 조사 (수동 트리거)
   function geminiResolve(id, question) {
-    const btn = document.getElementById('gbtn-' + id);
+    const gbtn = document.getElementById('gbtn-' + id);
     const status = document.getElementById('gstatus-' + id);
-    if (btn) { btn.disabled = true; btn.textContent = '🤖 조사 중...'; }
+    if (gbtn) { gbtn.disabled = true; gbtn.textContent = '🤖 조사 중...'; }
     if (status) { status.className = 'gemini-status loading'; status.textContent = '⏳ Gemini가 Google 검색으로 조사 중...'; }
     vscode.postMessage({ type: 'gemini_resolve', requestId: id, question });
   }
+  function fulfillRequest(id) {
+    const el = document.getElementById('req-' + id);
+    const response = el ? el.value.trim() : '';
+    if (!response) { alert('제공할 자료/결과를 입력하거나 📎 파일을 첨부해 주세요.'); return; }
+    vscode.postMessage({ type: 'fulfill_request', requestId: id, response });
+    refresh();
+  }
+  function attachFile(id) { vscode.postMessage({ type: 'open_file_picker', requestId: id }); }
+  function dismissRequest(id) {
+    if (confirm('이 요청을 무시할까요?')) {
+      vscode.postMessage({ type: 'dismiss_request', requestId: id });
+      refresh();
+    }
+  }
 
-  // 파일·Gemini 응답 처리
+  // 통합 클릭 핸들러 — 모든 버튼을 이벤트 위임으로 처리 (nonce CSP 환경에서도 동작)
+  document.addEventListener('click', function(e) {
+    const fileRow = e.target.closest('.file-row.clickable');
+    if (fileRow && fileRow.dataset.path) {
+      vscode.postMessage({ type: 'open_file', path: fileRow.dataset.path });
+      return;
+    }
+    const t = e.target.closest('[data-action]');
+    if (!t) return;
+    const action = t.dataset.action;
+    const id = t.dataset.id;
+    switch (action) {
+      case 'refresh':               refresh(); break;
+      case 'toggle-gemini-settings': toggleGeminiSettings(); break;
+      case 'save-gemini-key':       saveGeminiKey(); break;
+      case 'open-brain':            vscode.postMessage({ type: 'open_brain' }); break;
+      case 'open-folder':           vscode.postMessage({ type: 'open_folder', path: t.dataset.path }); break;
+      case 'toggle-activities':     toggleActivities(); break;
+      case 'gemini':                geminiResolve(id, t.dataset.question || ''); break;
+      case 'attach':                attachFile(id); break;
+      case 'fulfill':               fulfillRequest(id); break;
+      case 'dismiss-req':           dismissRequest(id); break;
+      case 'approve': {
+        const opt = t.dataset.option;
+        if (confirm('이 안으로 승인하시겠습니까?\n\n선택: ' + opt)) {
+          vscode.postMessage({ type: 'approve_decision', decisionId: t.dataset.decisionId, chosenValue: opt });
+          refresh();
+        }
+        break;
+      }
+      case 'reject': {
+        const reason = prompt('보류/반려 사유 (선택):', '');
+        if (reason !== null) {
+          vscode.postMessage({ type: 'reject_decision', decisionId: t.dataset.decisionId, reason });
+          refresh();
+        }
+        break;
+      }
+      case 'accept-suggestion': {
+        const note = prompt('채택합니다. 파트장에게 전할 메모 (선택):', '');
+        if (note !== null) {
+          vscode.postMessage({ type: 'accept_suggestion', suggestionId: t.dataset.suggestionId, note });
+          refresh();
+        }
+        break;
+      }
+      case 'dismiss-suggestion': {
+        const note = prompt('반려 사유 (선택):', '');
+        if (note !== null) {
+          vscode.postMessage({ type: 'dismiss_suggestion', suggestionId: t.dataset.suggestionId, note });
+          refresh();
+        }
+        break;
+      }
+    }
+  });
+
+  applyActivityState();
+
   window.addEventListener('message', e => {
     const msg = e.data;
     if (msg.type === 'file_loaded') {
@@ -2812,44 +2825,23 @@ class DashboardPanel {
     if (msg.type === 'gemini_done') {
       const el = document.getElementById('req-' + msg.requestId);
       if (el) el.value = msg.answer;
-      const btn = document.getElementById('gbtn-' + msg.requestId);
-      if (btn) { btn.disabled = false; btn.textContent = '🤖 Gemini 조사'; }
+      const gbtn = document.getElementById('gbtn-' + msg.requestId);
+      if (gbtn) { gbtn.disabled = false; gbtn.textContent = '🤖 Gemini 조사'; }
       const status = document.getElementById('gstatus-' + msg.requestId);
       if (status) { status.className = 'gemini-status done'; status.textContent = '✅ Gemini 조사 완료 — 내용 확인 후 제공하기를 눌러주세요'; }
     }
     if (msg.type === 'gemini_error') {
-      const btn = document.getElementById('gbtn-' + msg.requestId);
-      if (btn) { btn.disabled = false; btn.textContent = '🤖 Gemini 조사'; }
+      const gbtn = document.getElementById('gbtn-' + msg.requestId);
+      if (gbtn) { gbtn.disabled = false; gbtn.textContent = '🤖 Gemini 조사'; }
       const status = document.getElementById('gstatus-' + msg.requestId);
       if (status) { status.className = 'gemini-status error'; status.textContent = '❌ ' + msg.error; }
     }
     if (msg.type === 'gemini_key_saved') {
       const m = document.getElementById('geminiSavedMsg');
-      if (m) { m.textContent = '✅ 저장됨 (' + msg.masked + ')'; setTimeout(() => { if(m) m.textContent=''; }, 3000); }
-      // 헤더 상태 업데이트를 위해 새로고침
-      setTimeout(() => vscode.postMessage({ type: 'refresh' }), 500);
+      if (m) { m.textContent = '✅ 저장됨 (' + msg.masked + ')'; setTimeout(() => { if (m) m.textContent = ''; }, 3000); }
+      setTimeout(() => refresh(), 500);
     }
   });
-  function dismissRequest(id) {
-    if (confirm('이 요청을 무시할까요?')) {
-      vscode.postMessage({ type: 'dismiss_request', requestId: id });
-      refresh();
-    }
-  }
-  function acceptSuggestion(id) {
-    const note = prompt('채택합니다. 파트장에게 전할 메모 (선택):', '');
-    if (note !== null) {
-      vscode.postMessage({ type: 'accept_suggestion', suggestionId: id, note: note });
-      refresh();
-    }
-  }
-  function dismissSuggestion(id) {
-    const note = prompt('반려 사유 (선택):', '');
-    if (note !== null) {
-      vscode.postMessage({ type: 'dismiss_suggestion', suggestionId: id, note: note });
-      refresh();
-    }
-  }
 </script>
 </body>
 </html>`;
