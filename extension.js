@@ -2626,7 +2626,7 @@ class DashboardPanel {
     </div>
     <div class="header-right">
       <span class="refresh-time">마지막 갱신: ${now}</span>
-      <button class="btn gemini-settings-btn" id="geminiSettingsBtn">🤖 Gemini ${data.geminiKeySet ? '<span style="color:#3fb950">●</span>' : '<span style="color:#f85149">○</span>'}</button>
+      <button class="btn gemini-settings-btn" id="geminiSettingsBtn" onclick="toggleGeminiSettings()">🤖 Gemini ${data.geminiKeySet ? '<span style="color:#3fb950">●</span>' : '<span style="color:#f85149">○</span>'}</button>
       <button class="btn" onclick="refresh()">🔄 새로고침</button>
     </div>
   </div>
@@ -2639,7 +2639,7 @@ class DashboardPanel {
       <input class="gemini-key-input" id="geminiKeyInput" type="password"
              placeholder="API 키 입력 (AQ.Ab8RN6I8U1sj...)"
              value="${data.geminiKeyMasked || ''}"/>
-      <button class="gemini-save-btn" id="geminiSaveBtn">저장</button>
+      <button class="gemini-save-btn" id="geminiSaveBtn" onclick="saveGeminiKey()">저장</button>
       <span class="gemini-saved-msg" id="geminiSavedMsg"></span>
     </div>
   </div>
@@ -2737,12 +2737,6 @@ class DashboardPanel {
   // 이벤트 위임: 버튼이 매 새로고침마다 새로 그려져도 동작
   document.addEventListener('click', function(e) {
     if (e.target.closest('#actMoreBtn')) { toggleActivities(); return; }
-
-    // Gemini 설정 버튼 (헤더)
-    if (e.target.closest('#geminiSettingsBtn')) { toggleGeminiSettings(); return; }
-
-    // Gemini API 키 저장 버튼
-    if (e.target.closest('#geminiSaveBtn')) { saveGeminiKey(); return; }
 
     // 요청 카드 버튼 (data-action 방식)
     const btn = e.target.closest('[data-action]');
