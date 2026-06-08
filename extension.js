@@ -2225,7 +2225,13 @@ class DashboardPanel {
     this._update();
 
     // 30초마다 자동 새로고침
-    this._timer = setInterval(() => this._update(), 30_000);
+    // ★ 처리함에 처리할 항목이 있을 땐 자동 새로고침을 멈춤
+    //   (입력 중인 내용이 30초마다 지워지는 문제 방지)
+    this._timer = setInterval(() => {
+      const data = getDashboardData();
+      const hasInbox = data.pendingDecisions.length + data.pendingRequests.length + data.pendingSuggestions.length > 0;
+      if (!hasInbox) this._update();
+    }, 30_000);
 
     this._panel.onDidDispose(() => {
       clearInterval(this._timer);
@@ -2239,6 +2245,28 @@ class DashboardPanel {
       if (msg.type === 'approve_decision')   brain.approveDecision(msg.decisionId, msg.chosenValue);
       if (msg.type === 'reject_decision')    brain.rejectDecision(msg.decisionId, msg.reason);
       if (msg.type === 'fulfill_request')    brain.fulfillRequest(msg.requestId, msg.response);
+      if (msg.type === 'open_file_picker') {
+        // VS Code 네이티브 파일 선택창 → 텍스트 읽어 webview로 전달
+        vscode.window.showOpenDialog({
+          canSelectMany: false,
+          filters: { '텍스트·문서': ['txt', 'md', 'csv', 'json', 'pdf'] },
+          title: '자료 파일 선택 (텍스트·마크다운·CSV 권장)'
+        }).then(uris => {
+          if (!uris || !uris[0]) return;
+          try {
+            const raw = fs.readFileSync(uris[0].fsPath, 'utf8');
+            const content = raw.slice(0, 8000); // 너무 긴 파일은 앞부분만
+            this._panel.webview.postMessage({
+              type: 'file_loaded',
+              requestId: msg.requestId,
+              fileName: path.basename(uris[0].fsPath),
+              content
+            });
+          } catch {
+            vscode.window.showWarningMessage('파일을 읽지 못했습니다. 텍스트 파일(.txt .md .csv)을 선택해 주세요.');
+          }
+        });
+      }
       if (msg.type === 'dismiss_request')    brain.dismissRequest(msg.requestId);
       if (msg.type === 'accept_suggestion')  brain.acceptSuggestion(msg.suggestionId, msg.note);
       if (msg.type === 'dismiss_suggestion') brain.dismissSuggestion(msg.suggestionId, msg.note);
@@ -2370,8 +2398,10 @@ class DashboardPanel {
           </div>
           <div class="req-ask">${_esc(r.request)}</div>
           ${r.reason ? `<div class="req-reason">왜: ${_esc(r.reason)}</div>` : ''}
-          <textarea class="req-input" id="req-${_esc(r.id)}" placeholder="여기에 자료·결과를 입력해 제공하세요..."></textarea>
+          <textarea class="req-input" id="req-${_esc(r.id)}" placeholder="여기에 자료·결과를 직접 입력하거나, 📎 파일로 불러오세요..."></textarea>
+          <div class="req-file-hint" id="hint-${_esc(r.id)}"></div>
           <div class="req-actions">
+            <button class="req-attach" onclick="attachFile('${_esc(r.id)}')">📎 파일 첨부</button>
             <button class="req-submit" onclick="fulfillRequest('${_esc(r.id)}')">✓ 제공하기</button>
             <button class="req-dismiss" onclick="dismissRequest('${_esc(r.id)}')">✕ 무시</button>
           </div>
@@ -2518,6 +2548,9 @@ class DashboardPanel {
   .req-submit:hover { background: #a371f7; }
   .req-dismiss { padding: 6px 12px; background: transparent; color: #f85149; border: 1px solid #6e2a2a; border-radius: 5px; cursor: pointer; font-size: 12px; margin-left: auto; }
   .req-dismiss:hover { background: #5a1f1f; }
+  .req-attach { padding: 6px 10px; background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 5px; cursor: pointer; font-size: 12px; }
+  .req-attach:hover { background: #30363d; }
+  .req-file-hint { font-size: 11px; color: #3fb950; margin-bottom: 6px; min-height: 0; }
 
   /* ── 제안(suggestion) 카드 ── */
   .suggest-card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
@@ -2663,10 +2696,24 @@ class DashboardPanel {
   function fulfillRequest(id) {
     const el = document.getElementById('req-' + id);
     const response = el ? el.value.trim() : '';
-    if (!response) { alert('제공할 자료/결과를 입력해 주세요.'); return; }
+    if (!response) { alert('제공할 자료/결과를 입력하거나 📎 파일을 첨부해 주세요.'); return; }
     vscode.postMessage({ type: 'fulfill_request', requestId: id, response: response });
     refresh();
   }
+  function attachFile(id) {
+    vscode.postMessage({ type: 'open_file_picker', requestId: id });
+  }
+
+  // 파일 내용이 로드되면 입력창에 자동으로 채워줌
+  window.addEventListener('message', e => {
+    const msg = e.data;
+    if (msg.type === 'file_loaded') {
+      const el = document.getElementById('req-' + msg.requestId);
+      if (el) el.value = msg.content;
+      const hint = document.getElementById('hint-' + msg.requestId);
+      if (hint) hint.textContent = '📎 ' + msg.fileName + ' (' + msg.content.length + '자) 불러옴 — 확인 후 제공하기를 눌러주세요';
+    }
+  });
   function dismissRequest(id) {
     if (confirm('이 요청을 무시할까요?')) {
       vscode.postMessage({ type: 'dismiss_request', requestId: id });
