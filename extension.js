@@ -2964,42 +2964,54 @@ class GoalDashboardPanel {
 
 // ─────────────────────────────────────────────────────────────
 //  callGemini: Gemini API (Google Search 그라운딩)로 자료 요청 자동 해결
-//  - 실시간 웹 검색 결과를 바탕으로 답변 생성
-//  - 무료 티어: gemini-2.0-flash, 분당 15건, 일 1500건
+//  - 모델 자동 폴백: 2.0-flash → 1.5-flash 순으로 시도
+//  - API 키는 https://aistudio.google.com 에서 발급 (Google Cloud 키는 무료 한도 없음)
 // ─────────────────────────────────────────────────────────────
-async function callGemini(question, apiKey) {
-  if (!apiKey) throw new Error('Gemini API 키가 설정되지 않았습니다.');
 
+// 각 모델별 호출 설정
+const GEMINI_MODELS = [
+  {
+    model: 'gemini-2.0-flash',
+    tools: [{ google_search: {} }]
+  },
+  {
+    model: 'gemini-1.5-flash',
+    tools: [{ google_search_retrieval: {} }]
+  },
+  {
+    model: 'gemini-1.5-flash-8b',
+    tools: [{ google_search_retrieval: {} }]
+  }
+];
+
+async function _callGeminiModel(question, apiKey, model, tools) {
   const systemPrompt = `당신은 비즈니스 시장조사 전문가입니다.
 아래 질문에 대해 최신 정보를 바탕으로 명확하고 구체적으로 답변하세요.
 숫자·통계가 있으면 반드시 출처(기관명 또는 연도)를 명시하세요.
 확실하지 않은 정보는 "[추정]" 또는 "[출처 미확인]"으로 표시하세요.
 답변은 한국어로, 마크다운 형식으로 작성하세요.`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-  const body = {
-    system_instruction: { parts: [{ text: systemPrompt }] },
-    contents: [{ parts: [{ text: question }] }],
-    tools: [{ google_search: {} }]  // Google Search 그라운딩 활성화
-  };
-
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify({
+      system_instruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ parts: [{ text: question }] }],
+      tools
+    })
   });
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     const msg = err?.error?.message || `HTTP ${res.status}`;
-    throw new Error(`Gemini API 오류: ${msg}`);
+    throw new Error(msg);
   }
 
   const data = await res.json();
   const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('').trim();
   if (!text) throw new Error('Gemini 응답이 비어있습니다.');
 
-  // 검색 소스가 있으면 하단에 출처 목록 추가
   const grounds = data?.candidates?.[0]?.groundingMetadata?.groundingChunks;
   if (grounds && grounds.length > 0) {
     const sources = grounds
@@ -3010,6 +3022,29 @@ async function callGemini(question, apiKey) {
     return `${text}\n\n---\n**참고 출처:**\n${sources}`;
   }
   return text;
+}
+
+async function callGemini(question, apiKey) {
+  if (!apiKey) throw new Error('Gemini API 키가 설정되지 않았습니다.');
+
+  let lastErr;
+  for (const { model, tools } of GEMINI_MODELS) {
+    try {
+      return await _callGeminiModel(question, apiKey, model, tools);
+    } catch (err) {
+      lastErr = err;
+      const msg = err.message || '';
+      // 쿼터 초과·모델 미지원 오류면 다음 모델로 재시도
+      if (/quota|RESOURCE_EXHAUSTED|not found|not supported|deprecated/i.test(msg)) continue;
+      // 인증 오류 등 재시도 의미없는 오류는 즉시 실패
+      throw new Error(`Gemini API 오류: ${msg}`);
+    }
+  }
+  throw new Error(
+    `Gemini API 오류 (모든 모델 실패): ${lastErr?.message || '알 수 없는 오류'}\n\n` +
+    `💡 API 키를 https://aistudio.google.com 에서 발급받았는지 확인해 주세요.\n` +
+    `   (Google Cloud Console 키는 무료 한도가 없어 사용 불가)`
+  );
 }
 
 function _timeAgo(date) {
