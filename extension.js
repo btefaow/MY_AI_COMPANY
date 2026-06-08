@@ -18,7 +18,7 @@ const vscode   = require('vscode');
 const fs       = require('fs');
 const path     = require('path');
 const os       = require('os');
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 
 const { AGENTS, AGENT_MAP, DEFAULT_AGENT_ID } = require('./agents');
 const brain = require('./brain');
@@ -64,6 +64,28 @@ const FILE_RUNNERS = {
   '.py' : { cmd: 'python',  label: 'Python' },
   '.js' : { cmd: 'node',    label: 'Node.js' }
 };
+
+// ── 절전 방지 (자율 루프 실행 중 Windows Sleep 차단) ──────────────
+// SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED = 0x80000001)
+// 을 60초마다 갱신하는 백그라운드 PowerShell 프로세스를 유지한다.
+// 루프 종료·확장 비활성화 시 프로세스를 kill → 절전 자동 복원.
+let _wakelockProc = null;
+
+function startWakelock() {
+  if (_wakelockProc) return;
+  _wakelockProc = spawn('powershell', [
+    '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command',
+    `$t=Add-Type -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint f);' -Name WL -Namespace Win32 -PassThru; while($true){$t::SetThreadExecutionState(0x80000001);Start-Sleep 60}`
+  ], { windowsHide: true });
+  _wakelockProc.on('error', () => { _wakelockProc = null; });
+  _wakelockProc.on('exit',  () => { _wakelockProc = null; });
+}
+
+function stopWakelock() {
+  if (!_wakelockProc) return;
+  _wakelockProc.kill();
+  _wakelockProc = null;
+}
 
 const ACTION_TAGS_PROMPT = `
 ## 파일 및 터미널 작업 도구
@@ -303,6 +325,7 @@ class ChatViewProvider {
         // ★ 자율 루프 재시작
         if (!this._loopActive) {
           this._loopActive = true;
+          startWakelock();
           this._runAutonomousLoop(webviewView);
         }
       } else if (msg.type === 'set_loop_interval') {
@@ -319,6 +342,7 @@ class ChatViewProvider {
     webviewView.onDidDispose(() => {
       this._loopActive = false;
       if (this._sessionTimer) { clearTimeout(this._sessionTimer); this._sessionTimer = null; }
+      stopWakelock();
     });
   }
 
@@ -339,6 +363,7 @@ class ChatViewProvider {
   //   한 세션 안에서 여러 라운드 개선 → 간격 후 다음 세션 재시작
   async _startAutoBriefing(webviewView) {
     this._loopActive = true;
+    startWakelock();
     await this._runAutonomousLoop(webviewView);
   }
 
@@ -448,6 +473,7 @@ ${summary}
   _stopAutonomousLoop(webviewView) {
     this._loopActive = false;
     if (this._sessionTimer) { clearTimeout(this._sessionTimer); this._sessionTimer = null; }
+    stopWakelock();
     webviewView.webview.postMessage({ type: 'loop_status', text: '⏸ 자율 루프 정지됨 (▶ 버튼으로 재시작)' });
   }
 
@@ -3058,5 +3084,5 @@ function _esc(str) {
   return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function deactivate() {}
+function deactivate() { stopWakelock(); }
 module.exports = { activate, deactivate };
