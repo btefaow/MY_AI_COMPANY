@@ -2965,7 +2965,7 @@ class GoalDashboardPanel {
 // ─────────────────────────────────────────────────────────────
 //  callGemini: Gemini API (Google Search 그라운딩)로 자료 요청 자동 해결
 //  - 실시간 웹 검색 결과를 바탕으로 답변 생성
-//  - 무료 티어: gemini-1.5-flash, 분당 15건, 일 1M 토큰
+//  - 무료 티어: gemini-2.0-flash, 분당 15건, 일 1500건
 // ─────────────────────────────────────────────────────────────
 async function callGemini(question, apiKey) {
   if (!apiKey) throw new Error('Gemini API 키가 설정되지 않았습니다.');
@@ -2976,7 +2976,7 @@ async function callGemini(question, apiKey) {
 확실하지 않은 정보는 "[추정]" 또는 "[출처 미확인]"으로 표시하세요.
 답변은 한국어로, 마크다운 형식으로 작성하세요.`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
   const body = {
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents: [{ parts: [{ text: question }] }],
