@@ -2438,8 +2438,41 @@ class DashboardPanel {
 
     // ★ 사람 도움 요청 카드 (need_human) — 입력창으로 자료/결과 제공
     const reqTypeLabel = { data: '📊 자료', action: '⚡ 실행', file: '📎 파일', verify: '🔍 검증' };
+    const reqTypeFull  = { data: '자료 조사 요청', action: '실행/작업 요청', file: '파일 제공 요청', verify: '검증/확인 요청' };
+    const priorityFull = { high: '높음 🔴', medium: '보통 🟡', low: '낮음 🟢' };
+
+    // 각 요청에 대한 복사용 프롬프트 생성
+    const buildPrompt = (r) => {
+      const lines = [
+        `당신은 비즈니스 전문가입니다.`,
+        ``,
+        `## 배경`,
+        `${data.companyName}의 AI 에이전트 팀이 운영자에게 아래 내용을 요청했습니다.`,
+        `요청에 대해 최대한 구체적이고 실용적인 답변을 제공해 주세요.`,
+        ``,
+        `## 요청 유형`,
+        `${reqTypeFull[r.requestType] || '자료 조사 요청'} | 우선순위: ${priorityFull[r.priority] || '보통'} | 요청자: ${r.requestedBy}`,
+        ``,
+        `## 요청 내용`,
+        r.request,
+      ];
+      if (r.reason) lines.push(``, `## 요청 이유`, r.reason);
+      lines.push(
+        ``,
+        `## 답변 형식`,
+        `- 한국어로 작성해 주세요`,
+        `- 핵심 내용을 bullet point로 구체적으로 정리해 주세요`,
+        `- 숫자·통계가 있으면 출처(기관명, 연도)를 명시해 주세요`,
+        `- 마크다운 형식으로 작성해 주세요`
+      );
+      return lines.join('\n');
+    };
+
     const requestCards = (data.pendingRequests || []).length > 0
-      ? data.pendingRequests.map(r => `
+      ? data.pendingRequests.map(r => {
+          const promptText = buildPrompt(r);
+          const promptEsc  = _esc(promptText);
+          return `
         <div class="request-card" style="border-left: 4px solid ${priorityColor[r.priority] || '#a371f7'}">
           <div class="req-header">
             <span class="req-type">${reqTypeLabel[r.requestType] || '📊 자료'}</span>
@@ -2448,10 +2481,20 @@ class DashboardPanel {
           </div>
           <div class="req-ask">${_esc(r.request)}</div>
           ${r.reason ? `<div class="req-reason">왜: ${_esc(r.reason)}</div>` : ''}
+          <div class="prompt-box" id="pb-${_esc(r.id)}" style="display:none">
+            <div class="prompt-box-hdr">
+              <span class="prompt-box-label">📋 아래 프롬프트를 Claude / ChatGPT 등에 붙여넣고 답변을 받아 아래 입력창에 붙여넣으세요</span>
+              <button class="prompt-copy-btn" data-action="copy-prompt" data-id="${_esc(r.id)}">📋 클립보드 복사</button>
+              <span class="prompt-copy-ok" id="copy-ok-${_esc(r.id)}">✅ 복사됨!</span>
+            </div>
+            <textarea class="prompt-textarea" id="pt-${_esc(r.id)}" readonly>${promptEsc}</textarea>
+          </div>
           <div class="gemini-status" id="gstatus-${_esc(r.id)}"></div>
           <textarea class="req-input" id="req-${_esc(r.id)}" placeholder="여기에 직접 입력하거나, 📎 파일 첨부 또는 🤖 Gemini로 자동 조사..."></textarea>
           <div class="req-file-hint" id="hint-${_esc(r.id)}"></div>
           <div class="req-actions">
+            <button class="prompt-toggle"
+              data-action="toggle-prompt" data-id="${_esc(r.id)}">📋 프롬프트</button>
             <button class="req-gemini" id="gbtn-${_esc(r.id)}"
               data-action="gemini" data-id="${_esc(r.id)}" data-question="${_esc(r.request)}">🤖 Gemini 조사</button>
             <button class="req-attach"
@@ -2461,7 +2504,8 @@ class DashboardPanel {
             <button class="req-dismiss"
               data-action="dismiss-req" data-id="${_esc(r.id)}">✕ 무시</button>
           </div>
-        </div>`).join('')
+        </div>`;
+        }).join('')
       : '<div class="decision-empty">AI가 도움을 요청하면 여기에 표시됩니다.</div>';
 
     // ★ 제안 카드 (suggestion) — 파트장이 올린 중요 제안, 채택/반려
@@ -2611,6 +2655,15 @@ class DashboardPanel {
   .req-gemini:hover { background: #1f6feb; color: #fff; }
   .req-gemini:disabled { opacity: 0.5; cursor: not-allowed; }
   .gemini-status { font-size: 11px; margin-bottom: 6px; min-height: 0; }
+  .prompt-toggle { padding: 6px 10px; background: #1a2e1a; color: #3fb950; border: 1px solid #2a5a2a; border-radius: 5px; cursor: pointer; font-size: 12px; }
+  .prompt-toggle:hover { background: #1f3b1f; color: #56d364; }
+  .prompt-box { background: #0d1117; border: 1px solid #2a5a2a; border-radius: 7px; padding: 10px 12px; margin-bottom: 8px; }
+  .prompt-box-hdr { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; flex-wrap: wrap; }
+  .prompt-box-label { font-size: 11px; color: #8b949e; flex: 1; }
+  .prompt-copy-btn { padding: 4px 11px; background: #238636; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600; }
+  .prompt-copy-btn:hover { background: #2ea043; }
+  .prompt-copy-ok { font-size: 11px; color: #3fb950; font-weight: 700; display: none; }
+  .prompt-textarea { width: 100%; min-height: 130px; max-height: 260px; padding: 8px 10px; background: #161b22; color: #c9d1d9; border: 1px solid #21262d; border-radius: 5px; font-size: 11px; font-family: 'Consolas','Menlo',monospace; resize: vertical; line-height: 1.5; }
   .gemini-status.loading { color: #d29922; }
   .gemini-status.error { color: #f85149; }
   .gemini-status.done { color: #3fb950; }

@@ -83,6 +83,26 @@
       case 'open-brain':             vscode.postMessage({ type: 'open_brain' }); break;
       case 'open-folder':            vscode.postMessage({ type: 'open_folder', path: t.dataset.path }); break;
       case 'toggle-activities':      toggleActivities(); break;
+      case 'toggle-prompt': {
+        const pb = document.getElementById('pb-' + id);
+        if (pb) pb.style.display = pb.style.display === 'none' ? 'block' : 'none';
+        break;
+      }
+      case 'copy-prompt': {
+        const pt = document.getElementById('pt-' + id);
+        const ok = document.getElementById('copy-ok-' + id);
+        if (pt) {
+          navigator.clipboard.writeText(pt.value).then(() => {
+            if (ok) { ok.style.display = 'inline'; setTimeout(() => { ok.style.display = 'none'; }, 2500); }
+          }).catch(() => {
+            // clipboard API 실패 시 레거시 방식으로 폴백
+            pt.select();
+            document.execCommand('copy');
+            if (ok) { ok.style.display = 'inline'; setTimeout(() => { ok.style.display = 'none'; }, 2500); }
+          });
+        }
+        break;
+      }
       case 'gemini':                 geminiResolve(id, t.dataset.question || ''); break;
       case 'attach':                 attachFile(id); break;
       case 'fulfill':                fulfillRequest(id); break;
