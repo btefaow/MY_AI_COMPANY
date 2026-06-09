@@ -364,6 +364,7 @@ class ChatViewProvider {
   async _startAutoBriefing(webviewView) {
     this._loopActive = true;
     startWakelock();
+    brain.cleanOldDecisions(30);
     await this._runAutonomousLoop(webviewView);
   }
 
@@ -515,6 +516,9 @@ ${summary}
       ? fulfilled.map(r => `- 요청: ${r.request}\n  → 사람이 제공: ${r.userResponse}`).join('\n')
       : '(아직 없음)';
 
+    // ★ 지식베이스 (과거 누적 자료 — 날짜 무관 장기 참고)
+    const knowledgeSummary = brain.getKnowledgeSummary(1500);
+
     // ★ 대표님이 채택한 제안 — 파트장이 실행에 옮겨야 함
     const accepted = brain.getAcceptedSuggestions();
     const acceptedSummary = accepted.length > 0
@@ -540,8 +544,11 @@ ${goalsSummary}
 ## 오늘 승인된 결정
 ${decisionsSummary}
 
-## 사람이 제공한 자료 (실제 데이터 — 적극 활용, 이건 사실임)
+## 사람이 제공한 자료 (오늘 — 최우선 활용)
 ${fulfilledSummary}
+
+## 축적된 지식베이스 (과거 누적 자료 — 장기 참고)
+${knowledgeSummary || '(아직 없음)'}
 
 ## 대표님이 채택한 제안 (실행에 옮길 것)
 ${acceptedSummary}
@@ -3181,18 +3188,20 @@ class GoalDashboardPanel {
 // ─────────────────────────────────────────────────────────────
 
 // 각 모델별 호출 설정
+// ★ 2026년 기준 무료 등급에서 사용 가능한 모델만 사용 (gemini-1.5 계열은 퇴역됨)
+//   2.0 이상은 모두 google_search 그라운딩 도구 형식을 사용
 const GEMINI_MODELS = [
+  {
+    model: 'gemini-2.5-flash',
+    tools: [{ google_search: {} }]
+  },
   {
     model: 'gemini-2.0-flash',
     tools: [{ google_search: {} }]
   },
   {
-    model: 'gemini-1.5-flash',
-    tools: [{ google_search_retrieval: {} }]
-  },
-  {
-    model: 'gemini-1.5-flash-8b',
-    tools: [{ google_search_retrieval: {} }]
+    model: 'gemini-2.5-flash-lite',
+    tools: [{ google_search: {} }]
   }
 ];
 
@@ -3239,23 +3248,30 @@ async function _callGeminiModel(question, apiKey, model, tools) {
 async function callGemini(question, apiKey) {
   if (!apiKey) throw new Error('Gemini API 키가 설정되지 않았습니다.');
 
+  // 일시적 과부하·쿼터·모델 문제는 다른 모델/재시도로 우회, 인증 등 영구 오류는 즉시 실패
+  const RETRYABLE = /quota|RESOURCE_EXHAUSTED|not found|not supported|deprecated|overload|high demand|UNAVAILABLE|try again|temporarily|50[023]/i;
+  const MAX_ROUNDS = 3;  // 모델 목록 전체를 최대 3회전 (과부하 스파이크 대응)
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
   let lastErr;
-  for (const { model, tools } of GEMINI_MODELS) {
-    try {
-      return await _callGeminiModel(question, apiKey, model, tools);
-    } catch (err) {
-      lastErr = err;
-      const msg = err.message || '';
-      // 쿼터 초과·모델 미지원 오류면 다음 모델로 재시도
-      if (/quota|RESOURCE_EXHAUSTED|not found|not supported|deprecated/i.test(msg)) continue;
-      // 인증 오류 등 재시도 의미없는 오류는 즉시 실패
-      throw new Error(`Gemini API 오류: ${msg}`);
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    for (const { model, tools } of GEMINI_MODELS) {
+      try {
+        return await _callGeminiModel(question, apiKey, model, tools);
+      } catch (err) {
+        lastErr = err;
+        const msg = err.message || '';
+        if (RETRYABLE.test(msg)) continue;        // 다음 모델로 우회
+        throw new Error(`Gemini API 오류: ${msg}`); // 인증 등 영구 오류는 즉시 중단
+      }
     }
+    // 한 회전에서 모든 모델이 일시 오류 → 점점 길게 대기 후 재시도
+    if (round < MAX_ROUNDS - 1) await sleep(2000 * (round + 1));
   }
   throw new Error(
-    `Gemini API 오류 (모든 모델 실패): ${lastErr?.message || '알 수 없는 오류'}\n\n` +
-    `💡 API 키를 https://aistudio.google.com 에서 발급받았는지 확인해 주세요.\n` +
-    `   (Google Cloud Console 키는 무료 한도가 없어 사용 불가)`
+    `Gemini API 오류 (일시적 과부하로 추정): ${lastErr?.message || '알 수 없는 오류'}\n\n` +
+    `💡 모델이 잠시 혼잡합니다. 1~2분 뒤 다시 [Gemini 조사]를 눌러보세요.\n` +
+    `   계속 실패하면 [프롬프트] 복사 → 웹 챗봇(Perplexity 등)에 붙여넣어 답을 받는 방법을 쓰세요.`
   );
 }
 
