@@ -24,6 +24,7 @@ const path = require('path');
 // 뇌 폴더 루트 경로
 // __dirname = 이 파일(brain.js)이 있는 폴더 → My_AI_Company/my-ai-brain
 const BRAIN_DIR = path.join(__dirname, 'my-ai-brain');
+const KNOWLEDGE_DIR = path.join(BRAIN_DIR, 'knowledge');
 
 // ============================================================
 //  initBrain: 뇌 폴더 구조를 초기화합니다
@@ -427,8 +428,91 @@ function fulfillRequest(id, userResponse) {
     item.userResponse = (userResponse || '').slice(0, 2000);
     item.fulfilledAt = new Date().toISOString();
     fs.writeFileSync(filepath, JSON.stringify(item, null, 2), 'utf8');
+    appendToKnowledge(item);
     return item;
   } catch { return null; }
+}
+
+// 제공된 자료를 지식베이스 파일에 보존 (에이전트가 날짜 무관 장기 참조)
+const _TYPE_TO_KNOWLEDGE_FILE = { data: 'market.md', action: 'ops.md', file: 'files.md', verify: 'verify.md' };
+const MAX_KNOWLEDGE_ENTRIES = 20;  // ★ 파일당 유지할 최근 항목 수 (초과분은 *.archive.md로 밀어냄)
+// 답변 본문은 ###·--- 등 마크다운을 포함하므로, 본문과 충돌하지 않는 전용 구분자로 항목을 나눈다.
+const KB_DELIM = '<!-- ⟦KB-ENTRY⟧ -->';
+
+// 지식베이스 md 본문을 항목 배열로 분리 (오래된 것 → 최신 순).
+// 구분자가 없는 구형(레거시) 파일은 통째로 1개 항목으로 취급된다.
+function _splitKnowledgeEntries(content) {
+  return content
+    .split(KB_DELIM)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function appendToKnowledge(item) {
+  try {
+    fs.mkdirSync(KNOWLEDGE_DIR, { recursive: true });
+    const fileName = _TYPE_TO_KNOWLEDGE_FILE[item.requestType] || 'general.md';
+    const filePath = path.join(KNOWLEDGE_DIR, fileName);
+    const date = (item.fulfilledAt || new Date().toISOString()).slice(0, 10);
+    const entry = `### ${date} | ${item.request}\n*요청자: ${item.requestedBy || '에이전트'} | 유형: ${item.requestType || 'data'}*\n\n${item.userResponse}\n\n---`;
+
+    const prev = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+    const entries = _splitKnowledgeEntries(prev);
+    entries.push(entry);  // 최신 항목을 맨 뒤에
+
+    // 상한 초과 시 오래된 항목을 아카이브로 밀어냄 (디스크엔 남되 주입에선 제외)
+    if (entries.length > MAX_KNOWLEDGE_ENTRIES) {
+      const overflow = entries.splice(0, entries.length - MAX_KNOWLEDGE_ENTRIES);
+      const archivePath = path.join(KNOWLEDGE_DIR, fileName.replace(/\.md$/, '.archive.md'));
+      fs.appendFileSync(archivePath, '\n' + overflow.map(e => `${KB_DELIM}\n${e}`).join('\n') + '\n', 'utf8');
+    }
+
+    fs.writeFileSync(filePath, entries.map(e => `${KB_DELIM}\n${e}`).join('\n\n') + '\n', 'utf8');
+  } catch { /* 지식베이스 저장 실패는 메인 흐름에 영향 없음 */ }
+}
+
+// 지식베이스를 최신 항목부터 최대 maxChars 글자까지 반환 (브리핑 주입용)
+// archive 파일은 제외 — 활성 지식만 주입해 토큰을 일정하게 유지
+function getKnowledgeSummary(maxChars = 2000) {
+  try {
+    if (!fs.existsSync(KNOWLEDGE_DIR)) return '';
+    const label = { 'market.md': '시장/데이터', 'ops.md': '운영/실행', 'files.md': '파일', 'verify.md': '검증', 'general.md': '기타' };
+    const files = fs.readdirSync(KNOWLEDGE_DIR)
+      .filter(f => f.endsWith('.md') && !f.endsWith('.archive.md'));
+    if (files.length === 0) return '';
+    let result = '';
+    for (const f of files) {
+      const content = fs.readFileSync(path.join(KNOWLEDGE_DIR, f), 'utf8').trim();
+      if (!content) continue;
+      // 최신 항목(파일 뒤쪽)부터 역순으로 채워 넣어 오래된 항목에 묻히지 않게 함
+      const recent = _splitKnowledgeEntries(content).reverse().join('\n\n');
+      result += `\n**[${label[f] || f}]**\n${recent}\n`;
+      if (result.length >= maxChars) break;
+    }
+    return result.slice(0, maxChars);
+  } catch { return ''; }
+}
+
+// 30일 이상 지난 처리 완료 decisions 파일 삭제 (폴더 정리)
+function cleanOldDecisions(daysToKeep = 30) {
+  try {
+    const dir = path.join(BRAIN_DIR, 'decisions');
+    if (!fs.existsSync(dir)) return 0;
+    const cutoff = new Date(Date.now() - daysToKeep * 86_400_000).toISOString();
+    const resolved = new Set(['fulfilled', 'dismissed', 'approved', 'rejected', 'accepted']);
+    let count = 0;
+    for (const f of fs.readdirSync(dir).filter(f => f.endsWith('.json'))) {
+      try {
+        const item = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+        const ts = item.fulfilledAt || item.dismissedAt || item.approvedAt || item.rejectedAt || item.acceptedAt || '';
+        if (resolved.has(item.status) && ts && ts < cutoff) {
+          fs.unlinkSync(path.join(dir, f));
+          count++;
+        }
+      } catch { /* 파일 하나 실패해도 계속 */ }
+    }
+    return count;
+  } catch { return 0; }
 }
 
 // 요청 무시(필요 없어짐)
@@ -976,5 +1060,7 @@ module.exports = {
   getLoopInterval,
   setLoopInterval,
   getGeminiKey,
-  setGeminiKey
+  setGeminiKey,
+  getKnowledgeSummary,
+  cleanOldDecisions
 };
