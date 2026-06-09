@@ -58,10 +58,8 @@
   function attachFile(id) { vscode.postMessage({ type: 'open_file_picker', requestId: id }); }
 
   function dismissRequest(id) {
-    if (confirm('이 요청을 무시할까요?')) {
-      vscode.postMessage({ type: 'dismiss_request', requestId: id });
-      refresh();
-    }
+    vscode.postMessage({ type: 'dismiss_request', requestId: id });
+    refresh();
   }
 
   // 통합 클릭 핸들러 — 모든 버튼을 이벤트 위임으로 처리
@@ -109,34 +107,23 @@
       case 'dismiss-req':            dismissRequest(id); break;
       case 'approve': {
         const opt = t.dataset.option;
-        if (confirm('이 안으로 승인하시겠습니까?\n\n선택: ' + opt)) {
-          vscode.postMessage({ type: 'approve_decision', decisionId: t.dataset.decisionId, chosenValue: opt });
-          refresh();
-        }
+        vscode.postMessage({ type: 'approve_decision', decisionId: t.dataset.decisionId, chosenValue: opt });
+        refresh();
         break;
       }
       case 'reject': {
-        const reason = prompt('보류/반려 사유 (선택):', '');
-        if (reason !== null) {
-          vscode.postMessage({ type: 'reject_decision', decisionId: t.dataset.decisionId, reason });
-          refresh();
-        }
+        vscode.postMessage({ type: 'reject_decision', decisionId: t.dataset.decisionId, reason: '' });
+        refresh();
         break;
       }
       case 'accept-suggestion': {
-        const note = prompt('채택합니다. 파트장에게 전할 메모 (선택):', '');
-        if (note !== null) {
-          vscode.postMessage({ type: 'accept_suggestion', suggestionId: t.dataset.suggestionId, note });
-          refresh();
-        }
+        vscode.postMessage({ type: 'accept_suggestion', suggestionId: t.dataset.suggestionId, note: '' });
+        refresh();
         break;
       }
       case 'dismiss-suggestion': {
-        const note = prompt('반려 사유 (선택):', '');
-        if (note !== null) {
-          vscode.postMessage({ type: 'dismiss_suggestion', suggestionId: t.dataset.suggestionId, note });
-          refresh();
-        }
+        vscode.postMessage({ type: 'dismiss_suggestion', suggestionId: t.dataset.suggestionId, note: '' });
+        refresh();
         break;
       }
     }
